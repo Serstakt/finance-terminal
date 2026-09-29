@@ -1,0 +1,194 @@
+Index: backend/database/models.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>from sqlalchemy import Column, String, DateTime, Text\r\nfrom datetime import datetime\r\nfrom .database import Base\r\n\r\n\r\nclass NewsCache(Base):\r\n    __tablename__ = \"news_cache\"\r\n\r\n    ticker = Column(String, primary_key=True, index=True)\r\n    news_data = Column(Text)\r\n    timestamp = Column(DateTime, default=datetime.utcnow)\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/backend/database/models.py b/backend/database/models.py
+--- a/backend/database/models.py	(revision 8fd9f2c2d6699701fe5006bba3d04ee7938f031b)
++++ b/backend/database/models.py	(date 1789748642898)
+@@ -1,4 +1,4 @@
+-from sqlalchemy import Column, String, DateTime, Text
++from sqlalchemy import Column, String, DateTime, Text, Integer, Float, JSON, Date
+ from datetime import datetime
+ from .database import Base
+ 
+@@ -9,3 +9,35 @@
+     ticker = Column(String, primary_key=True, index=True)
+     news_data = Column(Text)
+     timestamp = Column(DateTime, default=datetime.utcnow)
++
++
++class FinancialMetrics(Base):
++    __tablename__ = "financial_metrics"
++
++    id = Column(Integer, primary_key=True, index=True)
++    symbol = Column(String, index=True, nullable=False)
++    period = Column(String, nullable=False)
++    period_type = Column(String, nullable=False)
++
++    # Финансовые показатели (в миллионах рублей)
++    revenue = Column(Float, nullable=True)
++    net_profit = Column(Float, nullable=True)
++    ebitda = Column(Float, nullable=True)
++    net_debt = Column(Float, nullable=True)
++    total_debt = Column(Float, nullable=True)
++    cash = Column(Float, nullable=True)
++    assets = Column(Float, nullable=True)
++    equity = Column(Float, nullable=True)
++
++    # Дополнительные метрики
++    eps = Column(Float, nullable=True)
++    dividends_per_share = Column(Float, nullable=True)
++    roe = Column(Float, nullable=True)
++    debt_to_equity = Column(Float, nullable=True)
++
++    # Резервное поле
++    raw_data = Column(JSON, nullable=True)
++
++    # Метаданные
++    report_date = Column(Date, nullable=True)
++    source_file = Column(String, nullable=True)
+\ No newline at end of file
+Index: backend/services/moex_service.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import aiohttp\r\n\r\n\r\nimport aiohttp\r\n\r\nasync def fetch_moex_price(ticker: str) -> dict:\r\n    ticker = ticker.upper().strip()\r\n\r\n    # 1. Индексы (IMOEX, RTSI, RGBI, IRUS)\r\n    if ticker in ['IMOEX', 'RTSI', 'RGBI', 'IRUS']:\r\n        url = f\"https://iss.moex.com/iss/engines/stock/markets/index/securities/IMOEX.json?spm=a2ty_o01.29997173.0.0.144e55fbQlTBXd&file=RTSI.json{ticker}.json\"\r\n    # 2. Валюты (BYNRUB, CNYRUB, USD000UTSTOM и любые с RUB)\r\n    elif 'RUB' in ticker or ticker in ['USD000UTSTOM', 'EUR_RUB__TOM']:\r\n        url = f\"https://iss.moex.com/iss/engines/currency/markets/currencies/boards/CETS/securities/{ticker}.json\"\r\n    # 3. Акции и облигации (по умолчанию)\r\n    else:\r\n        url = f\"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker}.json\"\r\n\r\n    async with aiohttp.ClientSession() as session:\r\n        try:\r\n            async with session.get(url, timeout=5) as response:\r\n                if response.status != 200:\r\n                    return {\"symbol\": f\"MOEX:{ticker}\", \"error\": f\"Not found (Status {response.status})\"}\r\n                data = await response.json()\r\n        except Exception as e:\r\n            return {\"symbol\": f\"MOEX:{ticker}\", \"error\": str(e)}\r\n\r\n    # MOEX возвращает данные в сложной структуре. Ищем marketdata\r\n    if not data.get('marketdata') or not data['marketdata'].get('data'):\r\n        return {\"symbol\": f\"MOEX:{ticker}\", \"error\": \"No data in marketdata\"}\r\n\r\n    columns = data['marketdata']['columns']\r\n    row = data['marketdata']['data'][0]\r\n\r\n    # Безопасная функция для получения значения по имени колонки\r\n    def get_col(name):\r\n        try:\r\n            return row[columns.index(name)]\r\n        except ValueError:\r\n            return None\r\n\r\n    # Для индексов иногда используется LASTVALUE, для акций LAST\r\n    price = get_col('LAST') or get_col('LASTVALUE') or get_col('VALTODAY')\r\n    change_percent = get_col('LASTTOPREVPRICE') or get_col('LASTCHANGEPRC')\r\n    change_value = get_col('CHANGE') or get_col('LASTCHANGE')\r\n\r\n    return {\r\n        \"symbol\": f\"MOEX:{ticker}\",\r\n        \"price\": float(price) if price else None,\r\n        \"changeDay\": float(change_percent) if change_percent else None,\r\n        \"changeValue\": float(change_value) if change_value else None\r\n    }\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/backend/services/moex_service.py b/backend/services/moex_service.py
+--- a/backend/services/moex_service.py	(revision 8fd9f2c2d6699701fe5006bba3d04ee7938f031b)
++++ b/backend/services/moex_service.py	(date 1789748182075)
+@@ -1,5 +1,3 @@
+-import aiohttp
+-
+ 
+ import aiohttp
+ 
+Index: backend/requirements.txt.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/backend/requirements.txt.py b/backend/requirements.txt.py
+--- a/backend/requirements.txt.py	(revision 8fd9f2c2d6699701fe5006bba3d04ee7938f031b)
++++ b/backend/requirements.txt.py	(date 1789748071521)
+@@ -1,0 +1,6 @@
++import pypdf2 as pypdf2
++from aiohttp import multipart
++from pip._internal.cli.cmdoptions import python
++
++pypdf2==3.0.1
++python-multipart==0.0.6
+Index: backend/services/financial_service.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/backend/services/financial_service.py b/backend/services/financial_service.py
+new file mode 100644
+--- /dev/null	(date 1789748310921)
++++ b/backend/services/financial_service.py	(date 1789748310921)
+@@ -0,0 +1,99 @@
++from sqlalchemy.orm import Session
++from ..database.database import SessionLocal
++from backend.database.models import Fi
++from datetime import date
++import PyPDF2
++import io
++import re
++
++async def get_financial_metrics(symbol: str, period_type: str = "quarter") -> list:
++    """Получает финансовые показатели по тикеру"""
++    db = SessionLocal()
++    try:
++        metrics = db.query(FinancialMetrics).filter(
++            FinancialMetrics.symbol == symbol,
++            FinancialMetrics.period_type == period_type
++        ).order_by(FinancialMetrics.period.desc()).all()
++
++        return [
++            {
++                "id": m.id,
++                "period": m.period,
++                "revenue": m.revenue,
++                "net_profit": m.net_profit,
++                "ebitda": m.ebitda,
++                "net_debt": m.net_debt,
++                "total_debt": m.total_debt,
++                "cash": m.cash,
++                "assets": m.assets,
++                "equity": m.equity,
++                "eps": m.eps,
++                "dividends_per_share": m.dividends_per_share,
++                "roe": m.roe,
++                "debt_to_equity": m.debt_to_equity,
++                "report_date": m.report_date.isoformat() if m.report_date else None
++            }
++            for m in metrics
++        ]
++    finally:
++        db.close()
++
++async def extract_text_from_pdf(file_content: bytes) -> str:
++    """Извлекает текст из PDF файла"""
++    try:
++        pdf_file = io.BytesIO(file_content)
++        pdf_reader = PyPDF2.PdfReader(pdf_file)
++
++        text = ""
++        for page in pdf_reader.pages:
++            text += page.extract_text() + "\n"
++
++        return text
++    except Exception as e:
++        raise Exception(f"Ошибка чтения PDF: {str(e)}")
++
++async def save_financial_metrics(symbol: str, period: str, period_type: str, metrics_data: dict, source_file: str = None) -> dict:
++    """Сохраняет финансовые показатели в БД"""
++    db = SessionLocal()
++    try:
++        # Проверяем, есть ли уже запись для этого периода
++        existing = db.query(FinancialMetrics).filter(
++            FinancialMetrics.symbol == symbol,
++            FinancialMetrics.period == period
++        ).first()
++
++        if existing:
++            # Обновляем существующую запись
++            for key, value in metrics_data.items():
++                if hasattr(existing, key):
++                    setattr(existing, key, value)
++            existing.report_date = date.today()
++            existing.source_file = source_file
++        else:
++            # Создаем новую запись
++            new_metric = FinancialMetrics(
++                symbol=symbol,
++                period=period,
++                period_type=period_type,
++                report_date=date.today(),
++                source_file=source_file,
++                **metrics_data
++            )
++            db.add(new_metric)
++
++        db.commit()
++        return {"status": "success", "message": "Данные сохранены"}
++    except Exception as e:
++        db.rollback()
++        raise Exception(f"Ошибка сохранения: {str(e)}")
++    finally:
++        db.close()
++
++async def get_all_symbols_with_metrics() -> list:
++    """Получает список всех тикеров, для которых есть финансовые данные"""
++    db = SessionLocal()
++    try:
++        symbols = db.query(FinancialMetrics.symbol).distinct().all()
++        return [s[0] for s in symbols]
++    finally:
++        db.close()
+\ No newline at end of file

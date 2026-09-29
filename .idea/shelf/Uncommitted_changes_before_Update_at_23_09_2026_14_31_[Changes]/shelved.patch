@@ -1,0 +1,584 @@
+Index: backend/main.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form\r\nfrom fastapi.middleware.cors import CORSMiddleware\r\nfrom fastapi.staticfiles import StaticFiles\r\nfrom fastapi.responses import FileResponse\r\nfrom pathlib import Path\r\nimport asyncio\r\n\r\nfrom .services import moex_service, yahoo_service, crypto_service, telegram_news_service\r\nfrom .services import portfolio_service\r\nfrom .services import financials_service\r\nfrom .models import schemas\r\n\r\napp = FastAPI(title=\"Financial Terminal API\")\r\n\r\n# CORS\r\napp.add_middleware(\r\n    CORSMiddleware,\r\n    allow_origins=[\"*\"],\r\n    allow_credentials=True,\r\n    allow_methods=[\"*\"],\r\n    allow_headers=[\"*\"],\r\n)\r\n\r\n# Путь к фронтенду\r\nFRONTEND_PATH = Path(__file__).parent.parent / \"frontend\"\r\n\r\n# Раздаем статику (CSS, JS) напрямую\r\napp.mount(\"/css\", StaticFiles(directory=FRONTEND_PATH / \"css\"), name=\"css\")\r\napp.mount(\"/js\", StaticFiles(directory=FRONTEND_PATH / \"js\"), name=\"js\")\r\n\r\n\r\n# Главная страница\r\n@app.get(\"/\")\r\nasync def root():\r\n    return FileResponse(FRONTEND_PATH / \"index.html\")\r\n\r\n\r\n# API endpoints\r\n@app.get(\"/api/prices/{symbol}\", response_model=schemas.PriceResponse)\r\nasync def get_price(symbol: str):\r\n    try:\r\n        if symbol.startswith(\"MOEX:\"):\r\n            return await moex_service.fetch_moex_price(symbol.replace(\"MOEX:\", \"\"))\r\n        elif symbol.startswith((\"NASDAQ:\", \"NYSE:\")):\r\n            return await yahoo_service.fetch_yahoo_price(symbol)\r\n        elif symbol.startswith(\"BINANCE:\"):\r\n            return await crypto_service.fetch_crypto_price(symbol.replace(\"BINANCE:\", \"\"))\r\n        else:\r\n            return await yahoo_service.fetch_yahoo_price(symbol)\r\n    except Exception as e:\r\n        raise HTTPException(status_code=500, detail=str(e))\r\n\r\n\r\n@app.get(\"/api/portfolio\")\r\nasync def get_portfolio():\r\n    return await portfolio_service.get_portfolio_with_pnl()\r\n\r\n\r\n@app.post(\"/api/portfolio\")\r\nasync def add_position_endpoint(position: schemas.PositionCreate):\r\n    sector = getattr(position, 'sector', 'Не указан')\r\n    return await portfolio_service.add_position(\r\n        position.symbol,\r\n        position.quantity,\r\n        position.avg_price,\r\n        sector\r\n    )\r\n\r\n\r\n@app.delete(\"/api/portfolio/{symbol}\")\r\nasync def remove_position_endpoint(symbol: str):\r\n    return await portfolio_service.remove_position(symbol)\r\n\r\n\r\n@app.get(\"/api/news/telegram/{ticker}\")\r\nasync def get_telegram_news(ticker: str, force_refresh: bool = Query(default=False)):\r\n    \"\"\"Новости из @newssmartlab по тикеру\"\"\"\r\n    clean_ticker = ticker.replace(\"MOEX:\", \"\").upper()\r\n\r\n    # Передаем флаг force_refresh в сервис\r\n    news = await telegram_news_service.fetch_smartlab_telegram_news(\r\n        clean_ticker,\r\n        force_refresh=force_refresh\r\n    )\r\n    return {\"symbol\": f\"MOEX:{clean_ticker}\", \"news\": news}\r\n\r\n\r\n# =============================================================================\r\n# ФИНАНСОВЫЕ ПОКАЗАТЕЛИ - API ENDPOINTS\r\n# =============================================================================\r\n\r\n@app.post(\"/api/financials/upload\")\r\nasync def upload_financial_report(\r\n    file: UploadFile = File(...),\r\n    ticker: str = Form(...),\r\n    period_type: str = Form(...)\r\n):\r\n    \"\"\"\r\n    Загружает файл с финансовой отчетностью и обрабатывает его с помощью LLM.\r\n    Извлеченные данные сохраняются в БД.\r\n    \"\"\"\r\n    try:\r\n        # Читаем содержимое файла\r\n        file_content = await file.read()\r\n        file_type = file.filename.split('.')[-1].lower() if '.' in file.filename else 'unknown'\r\n        \r\n        # Обрабатываем файл с помощью LLM (или заглушки)\r\n        llm_result = await financials_service.process_report_with_llm(\r\n            file_content=file_content,\r\n            file_type=file_type,\r\n            ticker=ticker,\r\n            period_type=period_type\r\n        )\r\n        \r\n        # Сохраняем данные в БД\r\n        save_result = await financials_service.save_financial_data(\r\n            ticker=ticker,\r\n            period_type=period_type,\r\n            period=llm_result[\"period\"],\r\n            end_date=llm_result[\"end_date\"],\r\n            metrics=llm_result[\"metrics\"]\r\n        )\r\n        \r\n        if save_result.get(\"status\") == \"error\":\r\n            raise HTTPException(status_code=500, detail=save_result.get(\"message\", \"Ошибка сохранения\"))\r\n        \r\n        return {\r\n            \"status\": \"ok\",\r\n            \"ticker\": ticker,\r\n            \"period\": llm_result[\"period\"],\r\n            \"end_date\": llm_result[\"end_date\"],\r\n            \"metrics\": llm_result[\"metrics\"]\r\n        }\r\n        \r\n    except Exception as e:\r\n        raise HTTPException(status_code=500, detail=str(e))\r\n\r\n\r\n@app.get(\"/api/financials/{ticker}\")\r\nasync def get_financial_data(ticker: str, period_type: str = None):\r\n    \"\"\"Получает финансовые данные для тикера\"\"\"\r\n    result = await financials_service.get_financial_data(ticker, period_type)\r\n    \r\n    if result.get(\"status\") == \"error\":\r\n        raise HTTPException(status_code=500, detail=result.get(\"message\", \"Ошибка получения данных\"))\r\n    \r\n    return result\r\n\r\n\r\n@app.delete(\"/api/financials/{ticker}/{period_type}/{period}\")\r\nasync def delete_financial_data(ticker: str, period_type: str, period: str):\r\n    \"\"\"Удаляет финансовые данные за указанный период\"\"\"\r\n    result = await financials_service.delete_financial_data(ticker, period_type, period)\r\n    \r\n    if result.get(\"status\") == \"error\":\r\n        raise HTTPException(status_code=404, detail=result.get(\"message\", \"Данные не найдены\"))\r\n    \r\n    return result\r\n\r\n\r\nif __name__ == \"__main__\":\r\n    import uvicorn\r\n\r\n    uvicorn.run(app, host=\"0.0.0.0\", port=8000, reload=True)\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/backend/main.py b/backend/main.py
+--- a/backend/main.py	(revision 9c67bb87899d1b9020f692ad1af9ea61cc5ff1a1)
++++ b/backend/main.py	(date 1790162688514)
+@@ -104,21 +104,24 @@
+         file_content = await file.read()
+         file_type = file.filename.split('.')[-1].lower() if '.' in file.filename else 'unknown'
+         
+-        # Обрабатываем файл с помощью LLM (или заглушки)
++        # Обрабатываем файл: читаем все строки отчетности (+ LLM при наличии ключа)
+         llm_result = await financials_service.process_report_with_llm(
+             file_content=file_content,
+             file_type=file_type,
+             ticker=ticker,
+             period_type=period_type
+         )
++
++        actual_period_type = llm_result.get("period_type") or period_type
+         
+-        # Сохраняем данные в БД
++        # Сохраняем данные (включая полную таблицу строк) в БД
+         save_result = await financials_service.save_financial_data(
+             ticker=ticker,
+-            period_type=period_type,
++            period_type=actual_period_type,
+             period=llm_result["period"],
+             end_date=llm_result["end_date"],
+-            metrics=llm_result["metrics"]
++            metrics=llm_result["metrics"],
++            raw_table=llm_result.get("raw_table")
+         )
+         
+         if save_result.get("status") == "error":
+@@ -128,10 +131,15 @@
+             "status": "ok",
+             "ticker": ticker,
+             "period": llm_result["period"],
++            "period_type": actual_period_type,
+             "end_date": llm_result["end_date"],
+-            "metrics": llm_result["metrics"]
++            "metrics": llm_result["metrics"],
++            "raw_table": llm_result.get("raw_table"),
++            "rows_count": llm_result.get("rows_count", 0)
+         }
+         
++    except ValueError as ve:
++        raise HTTPException(status_code=400, detail=str(ve))
+     except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+Index: frontend/css/styles.css
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/* ==========================================================================\r\n   1. \uD83C\uDF0D СБРОС И БАЗОВЫЕ СТИЛИ\r\n   ========================================================================== */\r\n* {\r\n  margin: 0;\r\n  padding: 0;\r\n  box-sizing: border-box;\r\n}\r\n\r\nbody {\r\n  font-family: -apple-system, sans-serif;\r\n  background: #131722;\r\n  color: #d1d4dc;\r\n  display: flex;\r\n  height: 100vh;\r\n  overflow: hidden;\r\n}\r\n\r\n/* ==========================================================================\r\n   2. \uD83E\uDDED НАВИГАЦИОННАЯ ПАНЕЛЬ\r\n   ========================================================================== */\r\n#nav-bar {\r\n  position: fixed; top: 0; left: 0; right: 0; height: 50px;\r\n  background: #1e222d; border-bottom: 1px solid #2a2e39;\r\n  display: flex; align-items: center; padding: 0 20px; z-index: 1000; gap: 10px;\r\n}\r\n.nav-btn {\r\n  background: transparent; border: none; color: #787b86;\r\n  padding: 8px 16px; border-radius: 4px; cursor: pointer;\r\n  font-size: 14px; font-weight: 600; transition: all 0.2s;\r\n}\r\n.nav-btn:hover { background: #2a2e39; color: #d1d4dc; }\r\n.nav-btn.active { background: #2962ff; color: #fff; }\r\n.nav-title { font-size: 16px; font-weight: 700; color: #d1d4dc; margin-right: 20px; }\r\n\r\n/* ==========================================================================\r\n   3. \uD83D\uDCD0 ОСНОВНОЙ МАКЕТ И СТРАНИЦЫ\r\n   ========================================================================== */\r\n#main-content { margin-top: 50px; flex: 1; display: flex; height: calc(100vh - 50px); }\r\n.page { display: none; width: 100%; height: 100%; }\r\n.page.active { display: flex; }\r\n\r\n/* ==========================================================================\r\n   4. \uD83C\uDFE0 ГЛАВНАЯ СТРАНИЦА (HOME)\r\n   ========================================================================== */\r\n#home-page { flex-direction: column; padding: 20px; overflow-y: auto; }\r\n.home-header { font-size: 24px; font-weight: 700; margin-bottom: 20px; color: #d1d4dc; }\r\n/* ==========================================================================\r\n   Контейнер для виджетов на главной странице (Flexbox)\r\n   ========================================================================== */\r\n.market-widgets-container {\r\n  display: flex;\r\n  gap: 20px;\r\n  width: 100%;\r\n  margin-bottom: 30px;\r\n}\r\n\r\n.tv-market-overview {\r\n  flex: 1.5;\r\n  min-height: 400px;\r\n  height: auto;\r\n  border-radius: 8px;\r\n  overflow: hidden;\r\n  border: 1px solid #2a2e39;\r\n  background: #1e222d;\r\n}\r\n\r\n.investing-widget-container {\r\n  flex: 1;\r\n  min-height: 400px;\r\n  height: 400px;\r\n  border-radius: 8px;\r\n  overflow: hidden;\r\n  border: 1px solid #2a2e39;\r\n  background: #1e222d;\r\n}\r\n\r\n/* Скрываем копирайт Investing, если он мешает (опционально) */\r\n.investing-widget-container .poweredBy {\r\n  display: none !important;\r\n}\r\n\r\n/* Адаптивность: на экранах меньше 1024px виджеты встанут друг под другом */\r\n@media (max-width: 1024px) {\r\n  .market-widgets-container {\r\n    flex-direction: column;\r\n  }\r\n  .tv-market-overview,\r\n  .investing-widget-container {\r\n    width: 100%;\r\n    flex: none;\r\n    height: 400px;\r\n  }\r\n}\r\ntv-market-data .tradingview-widget-copyright,\r\ntv-market-data a[href*=\"tradingview.com\"] { display: none !important; }\r\n\r\n.quick-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 15px; }\r\n.action-card {\r\n  background: #1e222d; border: 1px solid #2a2e39; border-radius: 8px;\r\n  padding: 20px; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 15px;\r\n}\r\n.action-card:hover { background: #2a2e39; border-color: #2962ff; }\r\n.action-icon { font-size: 32px; }\r\n.action-info h3 { font-size: 16px; font-weight: 600; margin-bottom: 5px; }\r\n.action-info p { font-size: 12px; color: #787b86; }\r\n\r\n/* ==========================================================================\r\n   5. \uD83D\uDCBC СТРАНИЦА ПОРТФЕЛЯ\r\n   ========================================================================== */\r\n#portfolio-page { flex-direction: column; align-items: center; padding: 20px; }\r\n.coming-soon { text-align: center; }\r\n.coming-soon h2 { font-size: 32px; margin-bottom: 15px; }\r\n.coming-soon p { color: #787b86; font-size: 16px; }\r\n\r\n/* ==========================================================================\r\n   6. \uD83D\uDCCB WATCHLIST: МАКЕТ И ЗАГОЛОВОК\r\n   ========================================================================== */\r\n#watchlist-page { flex-direction: row; }\r\n#watchlist {\r\n  width: 360px; min-width: 260px; max-width: 500px; background: #1e222d;\r\n  border-right: 1px solid #2a2e39; display: flex; flex-direction: column; height: 100%;\r\n}\r\n#watchlist.hidden { display: none !important; }\r\n\r\n/* Кнопки скрытия/показа панели */\r\n#hide-watchlist-btn {\r\n  background: transparent !important; border: 1px solid #363a45 !important; color: #787b86 !important;\r\n  padding: 2px 4px !important; border-radius: 2px !important; transition: all 0.2s ease !important;\r\n}\r\n#hide-watchlist-btn:hover {\r\n  background: #2a2e39 !important; border-color: #787b86 !important; color: #d1d4dc !important; transform: translateX(-2px);\r\n}\r\n#show-watchlist-btn {\r\n  position: absolute; left: 0; top: 50%; transform: translateY(-50%);\r\n  background: #1e222d; border: 1px solid #2a2e39; border-left: none;\r\n  color: #787b86; padding: 12px 6px; cursor: pointer; border-radius: 0 6px 6px 0;\r\n  z-index: 100; display: none; writing-mode: vertical-rl; text-orientation: mixed;\r\n  font-size: 11px; font-weight: 600; letter-spacing: 1px; transition: all 0.2s;\r\n}\r\n#show-watchlist-btn:hover { background: #2a2e39; color: #2962ff; }\r\n#show-watchlist-btn.visible { display: flex; }\r\n\r\n/* Изменение размера панели */\r\n#resizer { width: 5px; background: transparent; cursor: col-resize; transition: background 0.2s; z-index: 10; }\r\n#resizer:hover, #resizer.active { background: #2962ff; }\r\n#resizer.hidden { display: none !important; }\r\n\r\n/* Заголовок Watchlist */\r\n#watchlist-header {\r\n  padding: 10px 12px; border-bottom: 1px solid #2a2e39; font-weight: 600; font-size: 13px;\r\n  display: flex; justify-content: space-between; align-items: center; gap: 8px;\r\n}\r\n#list-controls { display: flex; align-items: center; gap: 6px; flex: 1; }\r\n#list-selector {\r\n  flex: 1; background: #2a2e39; color: #d1d4dc; border: 1px solid #363a45;\r\n  padding: 5px 8px; border-radius: 4px; font-size: 12px; outline: none; cursor: pointer;\r\n}\r\n#list-selector:focus { border-color: #2962ff; }\r\n#list-selector option { background: #1e222d; color: #d1d4dc; }\r\n\r\n#auto-refresh-indicator { color: #787b86; font-size: 10px; font-weight: 400; display: flex; align-items: center; gap: 4px; white-space: nowrap; }\r\n#auto-refresh-indicator .dot { width: 6px; height: 6px; border-radius: 50%; background: #26a69a; animation: pulse 2s infinite; }\r\n\r\n/* ==========================================================================\r\n   7. \uD83D\uDCCA ЗАГОЛОВКИ КОЛОНОК ТАБЛИЦЫ\r\n   ========================================================================== */\r\n.column-headers {\r\n  display: flex; padding: 6px 8px; background: #252a36; border-bottom: 1px solid #2a2e39;\r\n  font-size: 10px; font-weight: 600; color: #787b86; text-transform: uppercase; letter-spacing: 0.5px;\r\n}\r\n.column-header { cursor: pointer; user-select: none; transition: color 0.2s; display: flex; align-items: center; gap: 4px; }\r\n.column-header:hover { color: #d1d4dc; }\r\n.column-header.active { color: #2962ff; }\r\n.column-header .sort-icon { font-size: 9px; opacity: 0; transition: opacity 0.2s; }\r\n.column-header:hover .sort-icon, .column-header.active .sort-icon { opacity: 1; }\r\n\r\n.col-ticker { flex: 1; min-width: 70px; }\r\n.col-price { min-width: 50px; text-align: right; }\r\n.col-change { min-width: 40px; text-align: right; border-radius: 3px; }\r\n.col-change-pct { min-width: 44px; text-align: right; border-radius: 3px; }\r\n\r\n/* ==========================================================================\r\n   8. ➕ ФОРМА ДОБАВЛЕНИЯ ТИКЕРА\r\n   ========================================================================== */\r\n#add-form { display: flex; padding: 6px 8px; gap: 4px; border-bottom: 1px solid #2a2e39; }\r\n#add-input {\r\n  flex: 1; background: #2a2e39; border: 1px solid #363a45; color: #d1d4dc;\r\n  padding: 5px 8px; border-radius: 4px; font-size: 12px; outline: none;\r\n}\r\n#add-input:focus { border-color: #2962ff; }\r\n#add-btn { background: #2962ff; color: #fff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }\r\n#add-btn:hover { background: #1e53e5; }\r\n#add-section-btn {\r\n  background: transparent !important; border: 1px solid #363a45 !important; color: #787b86 !important;\r\n  padding: 5px 8px !important; border-radius: 4px !important; cursor: pointer !important;\r\n  font-size: 12px !important; transition: all 0.2s ease !important;\r\n}\r\n#add-section-btn:hover {\r\n  background: rgba(41, 98, 255, 0.1) !important; border-color: #2962ff !important; color: #2962ff !important;\r\n}\r\n\r\n/* ==========================================================================\r\n   9. \uD83D\uDCDC СПИСОК ТИКЕРОВ И ЭЛЕМЕНТЫ\r\n   ========================================================================== */\r\n#ticker-list { flex: 1; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; }\r\n#ticker-list::-webkit-scrollbar { display: none; }\r\n\r\n/* --- Базовый элемент тикера --- */\r\n.ticker-item {\r\n  padding: 4px 8px; cursor: pointer; font-size: 11px; transition: background 0.15s;\r\n  border-bottom: 1px solid #2a2e39; display: flex; align-items: center; gap: 6px;\r\n}\r\n.ticker-item:hover { background: #2a2e39; }\r\n.ticker-item.active { background: #2962ff22; border-left: 3px solid #2962ff; padding-left: 5px; }\r\n\r\n/* --- Drag & Drop --- */\r\n.drag-handle { color: #787b86; cursor: grab; opacity: 0; transition: opacity 0.15s; font-size: 14px; user-select: none; line-height: 1; }\r\n.ticker-item:hover .drag-handle { opacity: 1; }\r\n.drag-handle:active { cursor: grabbing; }\r\n\r\n/* --- Избранное (флажки) --- */\r\n.favorite-wrapper { display: inline-flex; align-items: center; cursor: pointer; position: relative; }\r\n.favorite-flag { font-size: 13px; transition: color 0.2s, transform 0.2s; display: inline-block; line-height: 1; }\r\n.favorite-flag.empty { color: #363a45; }\r\n.favorite-flag:hover { transform: scale(1.15); }\r\n.favorite-flag.empty:hover { color: #787b86; }\r\n.favorite-picker {\r\n  position: absolute; top: 100%; left: 0; background: #1e222d; border: 1px solid #363a45;\r\n  border-radius: 4px; padding: 4px; display: none; gap: 4px; z-index: 100;\r\n  box-shadow: 0 4px 12px rgba(0,0,0,0.5); margin-top: 2px;\r\n}\r\n.favorite-picker.active { display: flex; }\r\n.favorite-picker span {\r\n  cursor: pointer; font-size: 12px; padding: 1px; border-radius: 2px;\r\n  transition: background 0.15s, transform 0.15s;\r\n}\r\n.favorite-picker span:hover { background: #2a2e39; transform: scale(1.2); }\r\n\r\n/* === КРУГЛЫЙ ЛОГОТИП ТИКЕРА (меньший размер) === */\r\n.ticker-logo-container {\r\n  border-radius: 50%;\r\n  overflow: hidden;\r\n  width: 24px; /* Было 32px */\r\n  height: 24px; /* Было 32px */\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.ticker-logo-container img {\r\n  width: 100%;\r\n  height: 100%;\r\n  object-fit: cover;\r\n}\r\n\r\n.ticker-logo-fallback {\r\n  width: 100%;\r\n  height: 100%;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  background: #2a2e39;\r\n  color: #d1d4dc;\r\n  font-weight: 600;\r\n  font-size: 11px; /* Было 14px */\r\n  border-radius: 50%;\r\n}\r\n.ticker-info { flex: 1; display: flex; flex-direction: column; justify-content: center; min-width: 55px; }\r\n.ticker-symbol-link { font-weight: 600; font-size: 11px; display: block; color: #d1d4dc; text-decoration: none; transition: color 0.2s; line-height: 1.2; }\r\n.ticker-symbol-link:hover { color: #2962ff; text-decoration: underline; }\r\n\r\n/* --- Цены и изменения --- */\r\n.ticker-price { font-size: 11px; font-weight: 600; min-width: 48px; text-align: right; }\r\n.ticker-change, .ticker-change-percent {\r\n  font-size: 11px; font-weight: 600; min-width: 40px; text-align: right;\r\n  border-radius: 3px; padding: 1px 2px; transition: background-color 0.2s;\r\n}\r\n.ticker-change-percent { min-width: 44px; }\r\n.positive-bg { background-color: rgba(38, 166, 154, 0.15); color: #26a69a; }\r\n.negative-bg { background-color: rgba(239, 83, 80, 0.15); color: #ef5350; }\r\n.ticker-remove { color: #787b86; cursor: pointer; font-size: 12px; line-height: 1; opacity: 0; transition: opacity 0.15s; }\r\n.ticker-item:hover .ticker-remove { opacity: 1; }\r\n.ticker-remove:hover { color: #ef5350; }\r\n\r\n/* --- Алерты и скелетоны загрузки --- */\r\n.alert-bell { font-size: 12px; cursor: pointer; opacity: 0.4; transition: all 0.2s; }\r\n.alert-bell:hover { opacity: 1; transform: scale(1.1); }\r\n.alert-bell.active { opacity: 1; color: #ffca28; animation: ring 2s infinite; }\r\n.alert-bell.triggered { opacity: 1; color: #26a69a; animation: ring-triggered 1.5s infinite; }\r\n\r\n.skeleton {\r\n  background: linear-gradient(90deg, #2a2e39 25%, #363a45 50%, #2a2e39 75%);\r\n  background-size: 200% 100%; animation: skeleton-loading 1.5s infinite linear;\r\n  border-radius: 3px; display: inline-block;\r\n}\r\n.skeleton-price { width: 48px; height: 14px; }\r\n.skeleton-change { width: 40px; height: 14px; }\r\n.skeleton-change-pct { width: 44px; height: 14px; }\r\n\r\n/* ==========================================================================\r\n   10. \uD83D\uDCC8 КОНТЕЙНЕР ГРАФИКА\r\n   ========================================================================== */\r\n#chart-container {\r\n  flex: 1;\r\n  position: relative;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-height: 0;\r\n}\r\n\r\n#tradingview_chart {\r\n  flex: 1;\r\n  width: 100%;\r\n  min-height: 0;\r\n}\r\n\r\n.error-msg { color: #ef5350; padding: 20px; font-size: 14px; line-height: 1.5; }\r\n\r\n/* === ПАНЕЛЬ НОВОСТЕЙ === */\r\n#news-panel {\r\n  flex: 1;\r\n  min-height: 0;\r\n  display: none;\r\n  flex-direction: column;\r\n  margin-top: 20px;\r\n  background: #1e222d;\r\n  border-radius: 8px;\r\n  border: 1px solid #2a2e39;\r\n  overflow: hidden;\r\n}\r\n\r\n#news-list {\r\n  flex: 1;\r\n  overflow-y: auto;\r\n  min-height: 0;\r\n}\r\n\r\n#news-list::-webkit-scrollbar {\r\n  width: 8px;\r\n}\r\n#news-list::-webkit-scrollbar-track {\r\n  background: #1e222d;\r\n  border-radius: 4px;\r\n}\r\n#news-list::-webkit-scrollbar-thumb {\r\n  background: #363a45;\r\n  border-radius: 4px;\r\n}\r\n#news-list::-webkit-scrollbar-thumb:hover {\r\n  background: #787b86;\r\n}\r\n/* ==========================================================================\r\n   11. \uD83D\uDEE0 ПАНЕЛЬ УПРАВЛЕНИЯ (IO) И МЕНЮ\r\n   ========================================================================== */\r\n#io-panel { padding: 6px 8px; border-top: 1px solid #2a2e39; display: flex; gap: 4px; flex-wrap: wrap; }\r\n#io-panel > button:not(.admin-trigger) {\r\n  flex: 1; min-width: 70px; background: #2a2e39; color: #787b86;\r\n  border: 1px solid #363a45; padding: 5px; border-radius: 4px;\r\n  cursor: pointer; font-size: 11px; transition: all 0.2s;\r\n}\r\n#io-panel > button:not(.admin-trigger):hover { color: #d1d4dc; border-color: #787b86; }\r\n\r\n#open-tv-btn, #open-news-btn {\r\n  background: linear-gradient(135deg, #2962ff 0%, #1e53e5 100%) !important;\r\n  color: #fff !important; border: none !important; box-shadow: 0 2px 4px rgba(41, 98, 255, 0.2);\r\n  transition: all 0.2s ease !important; font-weight: 600;\r\n}\r\n#open-tv-btn:hover, #open-news-btn:hover {\r\n  transform: translateY(-2px); box-shadow: 0 4px 12px rgba(41, 98, 255, 0.4);\r\n  background: linear-gradient(135deg, #3b7bff 0%, #2962ff 100%) !important;\r\n}\r\n#open-tv-btn:active, #open-news-btn:active { transform: translateY(0); box-shadow: 0 2px 4px rgba(41, 98, 255, 0.2); }\r\n\r\n.admin-dropdown { position: relative; flex: 1; min-width: 70px; }\r\n.admin-trigger {\r\n  width: 100%; background: #2a2e39; color: #787b86; border: 1px solid #363a45;\r\n  padding: 5px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: all 0.2s;\r\n}\r\n.admin-trigger:hover { color: #d1d4dc; border-color: #787b86; background: #363a45; }\r\n.admin-menu {\r\n  position: absolute; bottom: 100%; left: 0; width: 100%; background: #1e222d;\r\n  border: 1px solid #363a45; border-radius: 4px; padding: 4px; display: flex;\r\n  flex-direction: column; gap: 4px; opacity: 0; visibility: hidden;\r\n  transform: translateY(10px); transition: all 0.2s ease; z-index: 100;\r\n  margin-bottom: 4px; box-shadow: 0 -4px 12px rgba(0,0,0,0.3);\r\n}\r\n.admin-dropdown:hover .admin-menu { opacity: 1; visibility: visible; transform: translateY(0); }\r\n.admin-menu button {\r\n  background: transparent; color: #d1d4dc; border: none; padding: 6px 10px;\r\n  text-align: left; cursor: pointer; border-radius: 4px; font-size: 11px; transition: background 0.15s;\r\n}\r\n.admin-menu button:hover { background: #2a2e39; color: #2962ff; }\r\n\r\n/* ==========================================================================\r\n   12. \uD83D\uDC1E ПАНЕЛЬ ОТЛАДКИ (DEBUG)\r\n   ========================================================================== */\r\n#debug-panel {\r\n  position: fixed; bottom: 0; left: 0; right: 0; background: #1e222d; border-top: 2px solid #2962ff;\r\n  padding: 10px; padding-top: 24px; height: 250px; min-height: 100px; max-height: 80vh;\r\n  overflow-y: auto; font-family: monospace; font-size: 11px; z-index: 1000; display: none;\r\n  scrollbar-width: none; -ms-overflow-style: none;\r\n}\r\n#debug-panel::-webkit-scrollbar { display: none; }\r\n#debug-panel.visible { display: block; }\r\n\r\n.debug-resize-handle {\r\n  position: absolute; top: 0; left: 0; right: 0; height: 8px; background: transparent;\r\n  cursor: row-resize; z-index: 11; transition: background 0.2s;\r\n}\r\n.debug-resize-handle:hover, .debug-resize-handle.active { background: #2962ff; }\r\n.debug-resize-handle::after {\r\n  content: ''; position: absolute; top: 3px; left: 50%; transform: translateX(-50%);\r\n  width: 40px; height: 2px; background: #363a45; border-radius: 1px; transition: background 0.2s;\r\n}\r\n.debug-resize-handle:hover::after, .debug-resize-handle.active::after { background: #fff; }\r\n\r\n.debug-close-btn {\r\n  position: absolute; top: 12px; right: 8px; width: 24px; height: 24px;\r\n  display: flex; align-items: center; justify-content: center; background: transparent;\r\n  border: none; color: #787b86; font-size: 18px; font-weight: 700; cursor: pointer;\r\n  border-radius: 4px; transition: all 0.2s; z-index: 12; line-height: 1;\r\n}\r\n.debug-close-btn:hover { background: #ef5350; color: #fff; }\r\n\r\n#debug-panel .log-entry { margin: 2px 0; padding: 2px 5px; border-left: 3px solid transparent; }\r\n#debug-panel .log-error { color: #ef5350; border-left-color: #ef5350; background: #2a1515; }\r\n#debug-panel .log-success { color: #26a69a; border-left-color: #26a69a; background: #152a25; }\r\n#debug-panel .log-info { color: #787b86; border-left-color: #787b86; }\r\n\r\n/* ==========================================================================\r\n   13. \uD83E\uDE9F МОДАЛЬНЫЕ ОКНА И СПИСКИ АЛЕРТОВ\r\n   ========================================================================== */\r\n.modal-overlay {\r\n  position: fixed; top: 0; left: 0; width: 100%; height: 100%;\r\n  background: rgba(0, 0, 0, 0.7); z-index: 2000;\r\n  display: none; align-items: center; justify-content: center;\r\n}\r\n.modal-overlay.active { display: flex; }\r\n.modal-box {\r\n  background: #1e222d; border: 1px solid #363a45; border-radius: 8px;\r\n  padding: 24px; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);\r\n}\r\n.modal-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #d1d4dc; }\r\n.modal-input, .modal-select {\r\n  width: 100%; background: #2a2e39; border: 1px solid #363a45; color: #d1d4dc;\r\n  padding: 8px; border-radius: 4px; font-size: 13px; margin-bottom: 12px; outline: none;\r\n}\r\n.modal-input:focus, .modal-select:focus { border-color: #2962ff; }\r\n.modal-buttons { display: flex; gap: 8px; margin-top: 16px; }\r\n.modal-btn {\r\n  flex: 1; padding: 8px; border-radius: 4px; border: none; cursor: pointer;\r\n  font-size: 13px; font-weight: 600; transition: background 0.2s;\r\n}\r\n.modal-btn-save { background: #2962ff; color: #fff; }\r\n.modal-btn-save:hover { background: #1e53e5; }\r\n.modal-btn-cancel { background: #363a45; color: #d1d4dc; }\r\n.modal-btn-cancel:hover { background: #4a5060; }\r\n.modal-btn-delete { background: rgba(239, 83, 80, 0.2); color: #ef5350; margin-top: 8px; width: 100%; }\r\n.modal-btn-delete:hover { background: rgba(239, 83, 80, 0.3); }\r\n\r\n.alerts-list-container { width: 450px; max-height: 400px; overflow-y: auto; }\r\n.alert-list-item {\r\n  display: flex; justify-content: space-between; align-items: center;\r\n  background: #252a36; padding: 10px 12px; border-radius: 6px;\r\n  margin-bottom: 8px; border-left: 3px solid #363a45;\r\n}\r\n.alert-list-item.status-active { border-left-color: #26a69a; }\r\n.alert-list-item.status-triggered { border-left-color: #ffca28; opacity: 0.7; }\r\n.alert-list-item.status-cancelled { border-left-color: #ef5350; opacity: 0.5; }\r\n.alert-item-info { display: flex; flex-direction: column; gap: 4px; }\r\n.alert-item-condition { font-size: 14px; font-weight: 600; color: #d1d4dc; }\r\n.alert-status { font-size: 11px; font-weight: 600; }\r\n.status-active { color: #26a69a; }\r\n.status-triggered { color: #ffca28; }\r\n.status-cancelled { color: #ef5350; }\r\n.mini-btn {\r\n  background: rgba(239, 83, 80, 0.2); color: #ef5350;\r\n  border: 1px solid rgba(239, 83, 80, 0.3); padding: 4px 10px;\r\n  border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s;\r\n}\r\n.mini-btn:hover { background: rgba(239, 83, 80, 0.4); color: #fff; }\r\n\r\n/* ==========================================================================\r\n   14. \uD83D\uDCC2 ЗАГОЛОВКИ РАЗДЕЛОВ (СЕКЦИЙ)\r\n   ========================================================================== */\r\n.section-header {\r\n  padding: 4px 8px; background: #252a36; color: #787b86; font-size: 11px; font-weight: 500;\r\n  text-transform: uppercase; letter-spacing: 0.5px; display: flex;\r\n  justify-content: space-between; align-items: center;\r\n  border-bottom: 1px solid #2a2e39; border-top: 1px solid #2a2e39;\r\n  margin-top: 4px; cursor: default; gap: 6px;\r\n}\r\n.section-header .section-title {\r\n  display: flex; align-items: center; gap: 6px; cursor: pointer;\r\n  transition: color 0.2s; font-size: 11px; font-weight: 500;\r\n}\r\n.section-header .section-title:hover { color: #d1d4dc; }\r\n.section-collapse-btn {\r\n  cursor: pointer; font-size: 9px; padding: 1px 3px; border-radius: 3px;\r\n  transition: background 0.2s; display: flex; align-items: center; line-height: 1;\r\n}\r\n.section-collapse-btn:hover { background: #363a45; color: #d1d4dc; }\r\n.section-header .drag-handle { cursor: grab; opacity: 0.5; font-size: 14px; }\r\n.section-header:hover .drag-handle { opacity: 1; }\r\n.section-header .ticker-remove { opacity: 0; font-size: 12px; transition: opacity 0.2s ease; }\r\n.section-header:hover .ticker-remove { opacity: 1; }\r\n\r\n/* ==========================================================================\r\n   15. \uD83D\uDD18 КНОПКИ ПЕРЕКЛЮЧЕНИЯ (TOGGLE)\r\n   ========================================================================== */\r\n.toggle-watchlist-btn {\r\n  background: transparent !important; border: none !important; color: #787b86 !important;\r\n  cursor: pointer; padding: 4px 6px !important; border-radius: 4px !important;\r\n  font-size: 14px !important; font-weight: 500 !important; transition: all 0.2s ease !important;\r\n  display: flex !important; align-items: center !important; justify-content: center !important;\r\n  min-width: 28px !important; height: 28px !important;\r\n}\r\n.toggle-watchlist-btn:hover { background: #2a2e39 !important; color: #d1d4dc !important; }\r\n.toggle-watchlist-btn:active { transform: scale(0.95) !important; background: #363a45 !important; }\r\n.toggle-watchlist-btn.danger:hover { background: rgba(239, 83, 80, 0.1) !important; color: #ef5350 !important; }\r\n.toggle-watchlist-btn.danger:active { background: rgba(239, 83, 80, 0.2) !important; }\r\n\r\n/* ==========================================================================\r\n   16. ✨ АНИМАЦИИ\r\n   ========================================================================== */\r\n@keyframes pulse {\r\n  0%, 100% { opacity: 1; }\r\n  50% { opacity: 0.3; }\r\n}\r\n@keyframes ring {\r\n  0%, 100% { transform: rotate(0); }\r\n  10%, 30%, 50% { transform: rotate(10deg); }\r\n  20%, 40% { transform: rotate(-10deg); }\r\n}\r\n@keyframes ring-triggered {\r\n  0%, 100% { transform: rotate(0) scale(1); }\r\n  10%, 30%, 50% { transform: rotate(15deg) scale(1.1); }\r\n  20%, 40% { transform: rotate(-15deg) scale(1.1); }\r\n}\r\n@keyframes skeleton-loading {\r\n  0% { background-position: 100% 50%; }\r\n  100% { background-position: 0 50%; }\r\n}\r\n\r\n/* ==========================================================================\r\n   17. \uD83D\uDCBC СТРАНИЦА ПОРТФЕЛЯ\r\n   ========================================================================== */\r\n.portfolio-container {\r\n    padding: 10px 40px 40px 40px;\r\n     width: 100%;\r\n     box-sizing: border-box;\r\n}\r\n\r\n.portfolio-header {\r\n  display: flex;\r\n  justify-content: space-between;\r\n  align-items: center;\r\n  margin-bottom: 24px;\r\n}\r\n\r\n.portfolio-title {\r\n  font-size: 28px;\r\n  font-weight: 700;\r\n  color: #d1d4dc;\r\n}\r\n\r\n.portfolio-actions {\r\n  display: flex;\r\n  gap: 12px;\r\n}\r\n\r\n.btn-primary, .btn-secondary {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 10px 16px;\r\n  border-radius: 6px;\r\n  font-size: 14px;\r\n  font-weight: 600;\r\n  cursor: pointer;\r\n  transition: all 0.2s;\r\n  border: none;\r\n}\r\n\r\n.btn-primary {\r\n  background: #2962ff;\r\n  color: #fff;\r\n}\r\n\r\n.btn-primary:hover {\r\n  background: #1e53e5;\r\n  transform: translateY(-1px);\r\n}\r\n\r\n.btn-secondary {\r\n  background: #2a2e39;\r\n  color: #d1d4dc;\r\n  border: 1px solid #363a45;\r\n}\r\n\r\n.btn-secondary:hover {\r\n  background: #363a45;\r\n}\r\n\r\n.portfolio-summary {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));\r\n  gap: 16px;\r\n  margin-bottom: 32px;\r\n}\r\n\r\n.summary-card {\r\n  background: #1e222d;\r\n  border: 1px solid #2a2e39;\r\n  border-radius: 8px;\r\n  padding: 20px;\r\n}\r\n\r\n.summary-card h4 {\r\n  font-size: 12px;\r\n  color: #787b86;\r\n  text-transform: uppercase;\r\n  margin-bottom: 8px;\r\n  font-weight: 600;\r\n}\r\n\r\n.summary-card .value {\r\n  font-size: 28px;\r\n  font-weight: 700;\r\n  color: #d1d4dc;\r\n}\r\n\r\n.summary-card .sub-value {\r\n  font-size: 14px;\r\n  margin-top: 4px;\r\n  font-weight: 600;\r\n}\r\n\r\n.text-green { color: #26a69a; }\r\n.text-red { color: #ef5350; }\r\n\r\n.portfolio-charts {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));\r\n  gap: 24px;\r\n  margin-bottom: 32px;\r\n}\r\n\r\n.chart-container {\r\n  background: #1e222d;\r\n  border: 1px solid #2a2e39;\r\n  border-radius: 8px;\r\n  padding: 20px;\r\n}\r\n\r\n.chart-title {\r\n  font-size: 16px;\r\n  font-weight: 600;\r\n  color: #d1d4dc;\r\n  margin-bottom: 16px;\r\n}\r\n\r\n.chart-wrapper {\r\n  position: relative;\r\n  height: 300px;\r\n}\r\n\r\n.portfolio-table-container {\r\n  background: #1e222d;\r\n  border: 1px solid #2a2e39;\r\n  border-radius: 8px;\r\n  padding: 20px;\r\n  overflow-x: auto;\r\n}\r\n\r\n.table-title {\r\n  font-size: 16px;\r\n  font-weight: 600;\r\n  color: #d1d4dc;\r\n  margin-bottom: 16px;\r\n}\r\n\r\n.portfolio-table {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n}\r\n\r\n.portfolio-table th,\r\n.portfolio-table td {\r\n  padding: 12px 16px;\r\n  text-align: left;\r\n  border-bottom: 1px solid #2a2e39;\r\n  font-size: 13px;\r\n}\r\n\r\n.portfolio-table th {\r\n  background: #252a36;\r\n  color: #787b86;\r\n  font-weight: 600;\r\n  text-transform: uppercase;\r\n  font-size: 11px;\r\n}\r\n\r\n.portfolio-table tr:hover {\r\n  background: #2a2e39;\r\n}\r\n\r\n.portfolio-table .empty-state {\r\n  text-align: center;\r\n  color: #787b86;\r\n  padding: 40px;\r\n}\r\n\r\n.portfolio-table .btn-icon {\r\n  background: transparent;\r\n  border: 1px solid #363a45;\r\n  color: #787b86;\r\n  width: 28px;\r\n  height: 28px;\r\n  border-radius: 4px;\r\n  cursor: pointer;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  transition: all 0.2s;\r\n  margin-right: 4px;\r\n}\r\n\r\n.portfolio-table .btn-icon:hover {\r\n  background: #363a45;\r\n  color: #d1d4dc;\r\n}\r\n\r\n.portfolio-table .btn-icon.delete:hover {\r\n  background: rgba(239, 83, 80, 0.1);\r\n  color: #ef5350;\r\n  border-color: #ef5350;\r\n}\r\n\r\n@media (max-width: 768px) {\r\n  .portfolio-summary {\r\n    grid-template-columns: 1fr;\r\n  }\r\n\r\n  .portfolio-charts {\r\n    grid-template-columns: 1fr;\r\n  }\r\n\r\n  .portfolio-header {\r\n    flex-direction: column;\r\n    align-items: flex-start;\r\n    gap: 16px;\r\n  }\r\n}\r\n/* ==========================================================================\r\n   10. \uD83D\uDCC8 ФИНАНСОВЫЕ ПОКАЗАТЕЛИ (FINANCIALS)\r\n   ========================================================================== */\r\n#financials-page {\r\n  display: none;\r\n  flex-direction: column;\r\n  padding: 20px;\r\n  overflow-y: auto;\r\n  background: #131722;\r\n}\r\n\r\n#financials-page.active {\r\n  display: flex;\r\n}\r\n\r\n.financials-container {\r\n  width: 100%;\r\n  height: 100%;\r\n  display: flex;\r\n  flex-direction: column;\r\n}\r\n\r\n.financials-header {\r\n  display: flex;\r\n  justify-content: space-between;\r\n  align-items: center;\r\n  margin-bottom: 20px;\r\n  padding-bottom: 15px;\r\n  border-bottom: 1px solid #2a2e39;\r\n}\r\n\r\n.financials-title {\r\n  font-size: 20px;\r\n  font-weight: 700;\r\n  color: #d1d4dc;\r\n  margin: 0;\r\n}\r\n\r\n.financials-content {\r\n  display: flex;\r\n  gap: 20px;\r\n  flex: 1;\r\n  overflow: hidden;\r\n}\r\n\r\n/* Левая панель со списком тикеров */\r\n.financials-sidebar {\r\n  width: 280px;\r\n  min-width: 280px;\r\n  background: #1e222d;\r\n  border: 1px solid #2a2e39;\r\n  border-radius: 8px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n}\r\n\r\n.financials-search {\r\n  display: flex;\r\n  padding: 12px;\r\n  gap: 8px;\r\n  border-bottom: 1px solid #2a2e39;\r\n}\r\n\r\n.financials-search input {\r\n  flex: 1;\r\n  background: #2a2e39;\r\n  border: 1px solid #363a45;\r\n  border-radius: 4px;\r\n  padding: 8px 12px;\r\n  color: #d1d4dc;\r\n  font-size: 13px;\r\n  outline: none;\r\n}\r\n\r\n.financials-search input:focus {\r\n  border-color: #2962ff;\r\n}\r\n\r\n.financials-search button {\r\n  background: #2962ff;\r\n  border: none;\r\n  border-radius: 4px;\r\n  width: 32px;\r\n  height: 32px;\r\n  color: #fff;\r\n  font-size: 18px;\r\n  cursor: pointer;\r\n  transition: background 0.2s;\r\n}\r\n\r\n.financials-search button:hover {\r\n  background: #1e54e6;\r\n}\r\n\r\n.financials-ticker-list {\r\n  flex: 1;\r\n  overflow-y: auto;\r\n  padding: 8px;\r\n}\r\n\r\n.financials-ticker-item {\r\n  display: flex;\r\n  justify-content: space-between;\r\n  align-items: center;\r\n  padding: 10px 12px;\r\n  margin-bottom: 4px;\r\n  background: #2a2e39;\r\n  border-radius: 6px;\r\n  cursor: pointer;\r\n  transition: all 0.2s;\r\n  border: 1px solid transparent;\r\n}\r\n\r\n.financials-ticker-item:hover {\r\n  background: #363a45;\r\n}\r\n\r\n.financials-ticker-item.active {\r\n  background: rgba(41, 98, 255, 0.15);\r\n  border-color: #2962ff;\r\n}\r\n\r\n.financials-ticker-item .ticker-name {\r\n  font-weight: 600;\r\n  color: #d1d4dc;\r\n  font-size: 14px;\r\n}\r\n\r\n.financials-ticker-item .ticker-remove {\r\n  background: transparent;\r\n  border: none;\r\n  color: #787b86;\r\n  cursor: pointer;\r\n  font-size: 16px;\r\n  padding: 4px;\r\n  opacity: 0;\r\n  transition: all 0.2s;\r\n}\r\n\r\n.financials-ticker-item:hover .ticker-remove {\r\n  opacity: 1;\r\n}\r\n\r\n.financials-ticker-item .ticker-remove:hover {\r\n  color: #ef5350;\r\n}\r\n\r\n/* Правая панель с таблицей */\r\n.financials-main {\r\n  flex: 1;\r\n  background: #1e222d;\r\n  border: 1px solid #2a2e39;\r\n  border-radius: 8px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n}\r\n\r\n.financials-controls {\r\n  display: flex;\r\n  justify-content: space-between;\r\n  align-items: center;\r\n  padding: 12px 16px;\r\n  border-bottom: 1px solid #2a2e39;\r\n}\r\n\r\n.toggle-group {\r\n  display: flex;\r\n  background: #2a2e39;\r\n  border-radius: 6px;\r\n  padding: 3px;\r\n}\r\n\r\n.toggle-btn {\r\n  background: transparent;\r\n  border: none;\r\n  color: #787b86;\r\n  padding: 6px 16px;\r\n  border-radius: 4px;\r\n  cursor: pointer;\r\n  font-size: 13px;\r\n  font-weight: 600;\r\n  transition: all 0.2s;\r\n}\r\n\r\n.toggle-btn:hover {\r\n  color: #d1d4dc;\r\n}\r\n\r\n.toggle-btn.active {\r\n  background: #2962ff;\r\n  color: #fff;\r\n}\r\n\r\n.selected-ticker-label {\r\n  font-size: 14px;\r\n  font-weight: 600;\r\n  color: #2962ff;\r\n}\r\n\r\n.financials-table-container {\r\n  flex: 1;\r\n  overflow: auto;\r\n  padding: 16px;\r\n}\r\n\r\n.financials-table {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-size: 13px;\r\n}\r\n\r\n.financials-table th,\r\n.financials-table td {\r\n  padding: 12px 16px;\r\n  text-align: left;\r\n  border-bottom: 1px solid #2a2e39;\r\n}\r\n\r\n.financials-table th {\r\n  background: #2a2e39;\r\n  color: #d1d4dc;\r\n  font-weight: 600;\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 10;\r\n}\r\n\r\n.financials-table tr:hover td {\r\n  background: rgba(41, 98, 255, 0.05);\r\n}\r\n\r\n.financials-table td:first-child {\r\n  font-weight: 600;\r\n  color: #d1d4dc;\r\n  background: #1e222d;\r\n  position: sticky;\r\n  left: 0;\r\n  z-index: 5;\r\n}\r\n\r\n.financials-table .metric-name {\r\n  color: #d1d4dc;\r\n}\r\n\r\n.financials-table .period-header {\r\n  color: #787b86;\r\n  font-size: 12px;\r\n  font-weight: normal;\r\n}\r\n\r\n.financials-empty {\r\n  text-align: center;\r\n  color: #787b86;\r\n  padding: 40px;\r\n}\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/frontend/css/styles.css b/frontend/css/styles.css
+--- a/frontend/css/styles.css	(revision 9c67bb87899d1b9020f692ad1af9ea61cc5ff1a1)
++++ b/frontend/css/styles.css	(date 1790162688520)
+@@ -1000,6 +1000,17 @@
+   color: #d1d4dc;
+ }
+ 
++/* Числовые ячейки полной таблицы отчета (в стиле smart-lab):
++   отрицательные значения красным, по правому краю */
++.financials-table td.num-cell {
++  text-align: right;
++  font-variant-numeric: tabular-nums;
++}
++
++.financials-table td.num-cell.negative {
++  color: #f23645;
++}
++
+ .financials-table .period-header {
+   color: #787b86;
+   font-size: 12px;
+Index: backend/services/financials_service.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>from sqlalchemy import Column, String, Text, DateTime, Integer, Float, ForeignKey\r\nfrom sqlalchemy.orm import relationship\r\nfrom datetime import datetime\r\nimport json\r\nfrom backend.database.database import Base, SessionLocal, engine\r\n\r\n\r\nclass FinancialReport(Base):\r\n    __tablename__ = 'financial_reports'\r\n    \r\n    id = Column(Integer, primary_key=True, index=True)\r\n    ticker = Column(String, index=True, nullable=False)\r\n    period_type = Column(String, nullable=False)  # 'quarterly' или 'annual'\r\n    period = Column(String, nullable=False)  # например 'Q1 2024' или '2024'\r\n    end_date = Column(String, nullable=True)  # дата окончания периода\r\n    metrics_json = Column(Text, nullable=False)  # JSON с метриками\r\n    created_at = Column(DateTime, default=datetime.utcnow)\r\n    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)\r\n\r\n\r\n# Создаем таблицу\r\nBase.metadata.create_all(bind=engine)\r\n\r\n\r\nasync def save_financial_data(ticker: str, period_type: str, period: str, \r\n                               end_date: str, metrics: dict) -> dict:\r\n    \"\"\"Сохраняет финансовые данные в БД\"\"\"\r\n    db = SessionLocal()\r\n    try:\r\n        # Проверяем, есть ли уже такая запись\r\n        existing = db.query(FinancialReport).filter_by(\r\n            ticker=ticker,\r\n            period_type=period_type,\r\n            period=period\r\n        ).first()\r\n        \r\n        if existing:\r\n            # Обновляем существующую запись\r\n            existing.metrics_json = json.dumps(metrics)\r\n            existing.end_date = end_date\r\n            existing.updated_at = datetime.utcnow()\r\n        else:\r\n            # Создаем новую запись\r\n            report = FinancialReport(\r\n                ticker=ticker,\r\n                period_type=period_type,\r\n                period=period,\r\n                end_date=end_date,\r\n                metrics_json=json.dumps(metrics)\r\n            )\r\n            db.add(report)\r\n        \r\n        db.commit()\r\n        \r\n        return {\r\n            \"status\": \"ok\",\r\n            \"ticker\": ticker,\r\n            \"period_type\": period_type,\r\n            \"period\": period,\r\n            \"end_date\": end_date,\r\n            \"metrics\": metrics\r\n        }\r\n    except Exception as e:\r\n        db.rollback()\r\n        return {\r\n            \"status\": \"error\",\r\n            \"message\": str(e)\r\n        }\r\n    finally:\r\n        db.close()\r\n\r\n\r\nasync def get_financial_data(ticker: str, period_type: str = None) -> dict:\r\n    \"\"\"Получает финансовые данные для тикера\"\"\"\r\n    db = SessionLocal()\r\n    try:\r\n        query = db.query(FinancialReport).filter_by(ticker=ticker)\r\n        \r\n        if period_type:\r\n            query = query.filter_by(period_type=period_type)\r\n        \r\n        reports = query.order_by(FinancialReport.created_at.desc()).all()\r\n        \r\n        result = {\r\n            \"ticker\": ticker,\r\n            \"quarterly\": {\"periods\": [], \"data\": {}},\r\n            \"annual\": {\"periods\": [], \"data\": {}}\r\n        }\r\n        \r\n        for report in reports:\r\n            metrics = json.loads(report.metrics_json)\r\n            period_data = {\r\n                \"period\": report.period,\r\n                \"end_date\": report.end_date\r\n            }\r\n            \r\n            # Добавляем период в список\r\n            result[report.period_type][\"periods\"].append(period_data)\r\n            \r\n            # Добавляем метрики\r\n            for key, value in metrics.items():\r\n                if key not in result[report.period_type][\"data\"]:\r\n                    result[report.period_type][\"data\"][key] = {}\r\n                result[report.period_type][\"data\"][key][report.period] = value\r\n        \r\n        # Сортируем периоды\r\n        for ptype in [\"quarterly\", \"annual\"]:\r\n            periods = result[ptype][\"periods\"]\r\n            if ptype == \"quarterly\":\r\n                # Сортировка кварталов\r\n                import re\r\n                def parse_quarter(p):\r\n                    match = re.match(r'Q(\\d+)\\s+(\\d+)', p.get(\"period\", \"\"))\r\n                    if match:\r\n                        return int(match.group(2)) * 10 + int(match.group(1))\r\n                    return 0\r\n                periods.sort(key=lambda x: parse_quarter(x))\r\n            else:\r\n                # Сортировка годов\r\n                periods.sort(key=lambda x: int(x.get(\"period\", \"0\")))\r\n        \r\n        return result\r\n    except Exception as e:\r\n        return {\r\n            \"status\": \"error\",\r\n            \"message\": str(e)\r\n        }\r\n    finally:\r\n        db.close()\r\n\r\n\r\nasync def delete_financial_data(ticker: str, period_type: str, period: str) -> dict:\r\n    \"\"\"Удаляет финансовые данные\"\"\"\r\n    db = SessionLocal()\r\n    try:\r\n        report = db.query(FinancialReport).filter_by(\r\n            ticker=ticker,\r\n            period_type=period_type,\r\n            period=period\r\n        ).first()\r\n        \r\n        if report:\r\n            db.delete(report)\r\n            db.commit()\r\n            return {\"status\": \"ok\"}\r\n        else:\r\n            return {\"status\": \"error\", \"message\": \"Запись не найдена\"}\r\n    except Exception as e:\r\n        db.rollback()\r\n        return {\"status\": \"error\", \"message\": str(e)}\r\n    finally:\r\n        db.close()\r\n\r\n\r\nasync def process_report_with_llm(file_content: bytes, file_type: str, \r\n                                   ticker: str, period_type: str) -> dict:\r\n    \"\"\"\r\n    Обрабатывает файл с отчетностью с помощью LLM и извлекает метрики.\r\n    \r\n    В реальной реализации здесь будет вызов LLM API для парсинга файла.\r\n    Сейчас это заглушка, которая возвращает тестовые данные.\r\n    \"\"\"\r\n    # TODO: Интегрировать с LLM для парсинга файлов\r\n    # Примерный план:\r\n    # 1. Отправить файл в LLM (Claude, GPT-4 Vision, etc.)\r\n    # 2. Попросить извлечь финансовые метрики в формате JSON\r\n    # 3. Распарсить ответ и вернуть структурированные данные\r\n    \r\n    # Для демонстрации возвращаем тестовые данные\r\n    # В реальности здесь будет логика вызова LLM API\r\n    \r\n    import random\r\n    \r\n    # Генерируем случайные данные для демонстрации\r\n    base_value = random.uniform(1e8, 1e10)\r\n    \r\n    metrics = {\r\n        \"revenue\": base_value,\r\n        \"gross_profit\": base_value * random.uniform(0.3, 0.5),\r\n        \"operating_income\": base_value * random.uniform(0.1, 0.25),\r\n        \"net_income\": base_value * random.uniform(0.05, 0.15),\r\n        \"ebitda\": base_value * random.uniform(0.15, 0.3),\r\n        \"eps\": random.uniform(1, 10),\r\n        \"pe_ratio\": random.uniform(10, 30),\r\n        \"roe\": random.uniform(10, 25),\r\n        \"debt_to_equity\": random.uniform(0.3, 1.5),\r\n        \"current_ratio\": random.uniform(1, 3),\r\n        \"free_cash_flow\": base_value * random.uniform(0.05, 0.15)\r\n    }\r\n    \r\n    # Определяем период и дату окончания\r\n    from datetime import datetime, timedelta\r\n    \r\n    if period_type == \"quarterly\":\r\n        # Определяем квартал\r\n        current_month = datetime.now().month\r\n        current_quarter = (current_month - 1) // 3 + 1\r\n        period = f\"Q{current_quarter} {datetime.now().year}\"\r\n        end_date = (datetime.now() - timedelta(days=30)).strftime(\"%Y-%m-%d\")\r\n    else:\r\n        period = str(datetime.now().year - 1)\r\n        end_date = f\"{datetime.now().year - 1}-12-31\"\r\n    \r\n    return {\r\n        \"period\": period,\r\n        \"end_date\": end_date,\r\n        \"metrics\": metrics\r\n    }\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/backend/services/financials_service.py b/backend/services/financials_service.py
+--- a/backend/services/financials_service.py	(revision 9c67bb87899d1b9020f692ad1af9ea61cc5ff1a1)
++++ b/backend/services/financials_service.py	(date 1790162688518)
+@@ -14,6 +14,7 @@
+     period = Column(String, nullable=False)  # например 'Q1 2024' или '2024'
+     end_date = Column(String, nullable=True)  # дата окончания периода
+     metrics_json = Column(Text, nullable=False)  # JSON с метриками
++    raw_json = Column(Text, nullable=True)  # JSON: полная таблица всех строк отчета
+     created_at = Column(DateTime, default=datetime.utcnow)
+     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+ 
+@@ -22,9 +23,28 @@
+ Base.metadata.create_all(bind=engine)
+ 
+ 
++def _migrate_add_raw_column():
++    """Добавляет колонку raw_json в существующую БД (SQLite), если её нет."""
++    try:
++        from sqlalchemy import inspect, text
++        insp = inspect(engine)
++        if 'financial_reports' in insp.get_table_names():
++            cols = {c['name'] for c in insp.get_columns('financial_reports')}
++            if 'raw_json' not in cols:
++                with engine.begin() as conn:
++                    conn.execute(text(
++                        "ALTER TABLE financial_reports ADD COLUMN raw_json TEXT"
++                    ))
++    except Exception as e:
++        print(f"[financials] миграция raw_json пропущена: {e}")
++
++
++_migrate_add_raw_column()
++
++
+ async def save_financial_data(ticker: str, period_type: str, period: str, 
+-                               end_date: str, metrics: dict) -> dict:
+-    """Сохраняет финансовые данные в БД"""
++                               end_date: str, metrics: dict, raw_table: dict = None) -> dict:
++    """Сохраняет финансовые данные (включая полную таблицу строк отчета) в БД"""
+     db = SessionLocal()
+     try:
+         # Проверяем, есть ли уже такая запись
+@@ -38,6 +58,8 @@
+             # Обновляем существующую запись
+             existing.metrics_json = json.dumps(metrics)
+             existing.end_date = end_date
++            if raw_table is not None:
++                existing.raw_json = json.dumps(raw_table, ensure_ascii=False)
+             existing.updated_at = datetime.utcnow()
+         else:
+             # Создаем новую запись
+@@ -46,7 +68,8 @@
+                 period_type=period_type,
+                 period=period,
+                 end_date=end_date,
+-                metrics_json=json.dumps(metrics)
++                metrics_json=json.dumps(metrics),
++                raw_json=json.dumps(raw_table, ensure_ascii=False) if raw_table is not None else None
+             )
+             db.add(report)
+         
+@@ -83,8 +106,8 @@
+         
+         result = {
+             "ticker": ticker,
+-            "quarterly": {"periods": [], "data": {}},
+-            "annual": {"periods": [], "data": {}}
++            "quarterly": {"periods": [], "data": {}, "rows": {}},
++            "annual": {"periods": [], "data": {}, "rows": {}}
+         }
+         
+         for report in reports:
+@@ -102,6 +125,21 @@
+                 if key not in result[report.period_type]["data"]:
+                     result[report.period_type]["data"][key] = {}
+                 result[report.period_type]["data"][key][report.period] = value
++
++            # Добавляем полную таблицу строк отчета (smart-lab style)
++            if report.raw_json:
++                try:
++                    raw = json.loads(report.raw_json)
++                    bucket = result[report.period_type].setdefault("rows", {})
++                    for row in raw.get("rows", []):
++                        name = row.get("name")
++                        if not name:
++                            continue
++                        target = bucket.setdefault(name, {})
++                        for col, val in (row.get("values") or {}).items():
++                            target[col] = val
++                except Exception:
++                    pass
+         
+         # Сортируем периоды
+         for ptype in ["quarterly", "annual"]:
+@@ -155,54 +193,51 @@
+ async def process_report_with_llm(file_content: bytes, file_type: str, 
+                                    ticker: str, period_type: str) -> dict:
+     """
+-    Обрабатывает файл с отчетностью с помощью LLM и извлекает метрики.
+-    
+-    В реальной реализации здесь будет вызов LLM API для парсинга файла.
+-    Сейчас это заглушка, которая возвращает тестовые данные.
++    Обрабатывает файл с отчетностью: читает ВСЕ строки отчета (Excel/CSV/PDF/DOCX/HTML),
++    строит полную таблицу по аналогии со smart-lab.ru, при наличии LLM_API_KEY —
++    обогащает данные через LLM (нормализация названий, определение периода).
+     """
+-    # TODO: Интегрировать с LLM для парсинга файлов
+-    # Примерный план:
+-    # 1. Отправить файл в LLM (Claude, GPT-4 Vision, etc.)
+-    # 2. Попросить извлечь финансовые метрики в формате JSON
+-    # 3. Распарсить ответ и вернуть структурированные данные
+-    
+-    # Для демонстрации возвращаем тестовые данные
+-    # В реальности здесь будет логика вызова LLM API
+-    
+-    import random
+-    
+-    # Генерируем случайные данные для демонстрации
+-    base_value = random.uniform(1e8, 1e10)
+-    
+-    metrics = {
+-        "revenue": base_value,
+-        "gross_profit": base_value * random.uniform(0.3, 0.5),
+-        "operating_income": base_value * random.uniform(0.1, 0.25),
+-        "net_income": base_value * random.uniform(0.05, 0.15),
+-        "ebitda": base_value * random.uniform(0.15, 0.3),
+-        "eps": random.uniform(1, 10),
+-        "pe_ratio": random.uniform(10, 30),
+-        "roe": random.uniform(10, 25),
+-        "debt_to_equity": random.uniform(0.3, 1.5),
+-        "current_ratio": random.uniform(1, 3),
+-        "free_cash_flow": base_value * random.uniform(0.05, 0.15)
++    from . import report_parser
++
++    result = await report_parser.parse_report_file(
++        filename=f"report.{file_type}",
++        content=file_content,
++        ticker=ticker,
++    )
++
++    raw_table = result["raw_table"]
++    if not raw_table["rows"]:
++        raise ValueError(
++            "Не удалось извлечь ни одной строки из файла. "
++            "Поддерживаются Excel (.xlsx), CSV, PDF, DOCX, HTML с табличными данными."
++        )
++
++    # Ключевые метрики для совместимости со старым представлением данных
++    key_map = {
++        "revenue": ("выручка",),
++        "gross_profit": ("валовая прибыль",),
++        "operating_income": ("операционная прибыль", "прибыль от продаж"),
++        "net_income": ("чистая прибыль",),
++        "ebitda": ("ebitda",),
+     }
+-    
+-    # Определяем период и дату окончания
+-    from datetime import datetime, timedelta
+-    
+-    if period_type == "quarterly":
+-        # Определяем квартал
+-        current_month = datetime.now().month
+-        current_quarter = (current_month - 1) // 3 + 1
+-        period = f"Q{current_quarter} {datetime.now().year}"
+-        end_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+-    else:
+-        period = str(datetime.now().year - 1)
+-        end_date = f"{datetime.now().year - 1}-12-31"
+-    
++    metrics = {}
++    period = result["period"]
++    for m_key, patterns in key_map.items():
++        for row in raw_table["rows"]:
++            name_l = row["name"].lower()
++            if any(p in name_l for p in patterns):
++                val = row["values"].get(period)
++                if val is None and row["values"]:
++                    val = next(iter(row["values"].values()))
++                if val is not None:
++                    metrics[m_key] = val
++                break
++
+     return {
+         "period": period,
+-        "end_date": end_date,
+-        "metrics": metrics
++        "end_date": result["end_date"],
++        "period_type": result.get("period_type") or period_type,
++        "metrics": metrics,
++        "raw_table": raw_table,
++        "rows_count": len(raw_table["rows"]),
+     }
+Index: frontend/js/financials.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>// ==========================================================================\r\n// ФИНАНСОВЫЕ ПОКАЗАТЕЛИ - МОДУЛЬ УПРАВЛЕНИЯ\r\n// ==========================================================================\r\n\r\nconst FinancialsModule = (function() {\r\n    // Состояние\r\n    let state = {\r\n        tickers: [],\r\n        selectedTicker: null,\r\n        periodType: 'quarterly', // 'quarterly' или 'annual'\r\n        financialData: {} // { ticker: { periods: [...], metrics: {...} } }\r\n    };\r\n\r\n    // Стандартные метрики для отображения\r\n    const defaultMetrics = [\r\n        { key: 'revenue', name: 'Выручка' },\r\n        { key: 'gross_profit', name: 'Валовая прибыль' },\r\n        { key: 'operating_income', name: 'Операционная прибыль' },\r\n        { key: 'net_income', name: 'Чистая прибыль' },\r\n        { key: 'ebitda', name: 'EBITDA' },\r\n        { key: 'eps', name: 'EPS (прибыль на акцию)' },\r\n        { key: 'pe_ratio', name: 'P/E Ratio' },\r\n        { key: 'roe', name: 'ROE' },\r\n        { key: 'debt_to_equity', name: 'Debt/Equity' },\r\n        { key: 'current_ratio', name: 'Current Ratio' },\r\n        { key: 'free_cash_flow', name: 'Свободный денежный поток' }\r\n    ];\r\n\r\n    // Инициализация модуля\r\n    function init() {\r\n        loadTickersFromStorage();\r\n        setupEventListeners();\r\n        renderTickerList();\r\n        // Загружаем данные для всех тикеров из API\r\n        loadAllFinancialDataFromAPI();\r\n        console.log('Financials Module initialized');\r\n    }\r\n\r\n    // Загрузка всех данных из API\r\n    async function loadAllFinancialDataFromAPI() {\r\n        if (state.tickers.length === 0) return;\r\n        \r\n        for (const ticker of state.tickers) {\r\n            try {\r\n                const response = await fetch(`/api/financials/${ticker}`);\r\n                if (response.ok) {\r\n                    const data = await response.json();\r\n                    \r\n                    // Обновляем состояние данными из API\r\n                    if (!state.financialData[ticker]) {\r\n                        state.financialData[ticker] = {\r\n                            quarterly: { periods: [], data: {} },\r\n                            annual: { periods: [], data: {} }\r\n                        };\r\n                    }\r\n                    \r\n                    // Merge данных из API\r\n                    if (data.quarterly && data.quarterly.periods) {\r\n                        data.quarterly.periods.forEach(p => {\r\n                            if (!state.financialData[ticker].quarterly.periods.find(ep => ep.period === p.period)) {\r\n                                state.financialData[ticker].quarterly.periods.push(p);\r\n                            }\r\n                        });\r\n                        // Merge metrics\r\n                        Object.keys(data.quarterly.data || {}).forEach(metricKey => {\r\n                            if (!state.financialData[ticker].quarterly.data[metricKey]) {\r\n                                state.financialData[ticker].quarterly.data[metricKey] = {};\r\n                            }\r\n                            Object.assign(state.financialData[ticker].quarterly.data[metricKey], data.quarterly.data[metricKey]);\r\n                        });\r\n                    }\r\n                    \r\n                    if (data.annual && data.annual.periods) {\r\n                        data.annual.periods.forEach(p => {\r\n                            if (!state.financialData[ticker].annual.periods.find(ep => ep.period === p.period)) {\r\n                                state.financialData[ticker].annual.periods.push(p);\r\n                            }\r\n                        });\r\n                        // Merge metrics\r\n                        Object.keys(data.annual.data || {}).forEach(metricKey => {\r\n                            if (!state.financialData[ticker].annual.data[metricKey]) {\r\n                                state.financialData[ticker].annual.data[metricKey] = {};\r\n                            }\r\n                            Object.assign(state.financialData[ticker].annual.data[metricKey], data.annual.data[metricKey]);\r\n                        });\r\n                    }\r\n                }\r\n            } catch (error) {\r\n                console.error(`Ошибка загрузки данных для ${ticker}:`, error);\r\n            }\r\n        }\r\n        \r\n        saveFinancialDataToStorage();\r\n        if (state.selectedTicker) {\r\n            renderFinancialTable();\r\n        }\r\n    }\r\n\r\n    // Загрузка тикеров из localStorage\r\n    function loadTickersFromStorage() {\r\n        const stored = localStorage.getItem('financials_tickers');\r\n        if (stored) {\r\n            try {\r\n                state.tickers = JSON.parse(stored);\r\n            } catch (e) {\r\n                state.tickers = [];\r\n            }\r\n        }\r\n        \r\n        // Загрузка финансовых данных\r\n        const storedData = localStorage.getItem('financials_data');\r\n        if (storedData) {\r\n            try {\r\n                state.financialData = JSON.parse(storedData);\r\n            } catch (e) {\r\n                state.financialData = {};\r\n            }\r\n        }\r\n    }\r\n\r\n    // Сохранение тикеров в localStorage\r\n    function saveTickersToStorage() {\r\n        localStorage.setItem('financials_tickers', JSON.stringify(state.tickers));\r\n    }\r\n\r\n    // Сохранение финансовых данных\r\n    function saveFinancialDataToStorage() {\r\n        localStorage.setItem('financials_data', JSON.stringify(state.financialData));\r\n    }\r\n\r\n    // Настройка обработчиков событий\r\n    function setupEventListeners() {\r\n        // Добавление тикера\r\n        const addBtn = document.getElementById('financials-add-ticker-btn');\r\n        const searchInput = document.getElementById('financials-search-input');\r\n        \r\n        if (addBtn) {\r\n            addBtn.addEventListener('click', addTicker);\r\n        }\r\n        \r\n        if (searchInput) {\r\n            searchInput.addEventListener('keypress', (e) => {\r\n                if (e.key === 'Enter') {\r\n                    addTicker();\r\n                }\r\n            });\r\n        }\r\n    }\r\n\r\n    // Добавление тикера\r\n    function addTicker() {\r\n        const input = document.getElementById('financials-search-input');\r\n        const ticker = input.value.trim().toUpperCase();\r\n        \r\n        if (!ticker) {\r\n            alert('Введите тикер');\r\n            return;\r\n        }\r\n        \r\n        if (state.tickers.includes(ticker)) {\r\n            alert('Этот тикер уже добавлен');\r\n            return;\r\n        }\r\n        \r\n        state.tickers.push(ticker);\r\n        saveTickersToStorage();\r\n        renderTickerList();\r\n        input.value = '';\r\n        \r\n        // Инициализируем пустые данные для тикера если их нет\r\n        if (!state.financialData[ticker]) {\r\n            state.financialData[ticker] = {\r\n                quarterly: { periods: [], data: {} },\r\n                annual: { periods: [], data: {} }\r\n            };\r\n            saveFinancialDataToStorage();\r\n        }\r\n    }\r\n\r\n    // Удаление тикера\r\n    function removeTicker(ticker, event) {\r\n        event.stopPropagation();\r\n        \r\n        if (!confirm(`Удалить тикер ${ticker}?`)) {\r\n            return;\r\n        }\r\n        \r\n        state.tickers = state.tickers.filter(t => t !== ticker);\r\n        if (state.selectedTicker === ticker) {\r\n            state.selectedTicker = null;\r\n        }\r\n        saveTickersToStorage();\r\n        renderTickerList();\r\n    }\r\n\r\n    // Выбор тикера\r\n    function selectTicker(ticker) {\r\n        state.selectedTicker = ticker;\r\n        renderTickerList();\r\n        updateSelectedLabel();\r\n        renderFinancialTable();\r\n    }\r\n\r\n    // Обновление метки выбранного тикера\r\n    function updateSelectedLabel() {\r\n        const label = document.getElementById('selected-ticker-label');\r\n        if (label) {\r\n            label.textContent = state.selectedTicker || 'Выберите тикер';\r\n        }\r\n    }\r\n\r\n    // Отрисовка списка тикеров\r\n    function renderTickerList() {\r\n        const container = document.getElementById('financials-ticker-list');\r\n        if (!container) return;\r\n        \r\n        if (state.tickers.length === 0) {\r\n            container.innerHTML = '<div class=\"empty-state\">Список пуст. Добавьте тикеры для анализа.</div>';\r\n            return;\r\n        }\r\n        \r\n        container.innerHTML = state.tickers.map(ticker => `\r\n            <div class=\"financials-ticker-item ${state.selectedTicker === ticker ? 'active' : ''}\" \r\n                 onclick=\"FinancialsModule.selectTicker('${ticker}')\">\r\n                <span class=\"ticker-name\">${ticker}</span>\r\n                <button class=\"ticker-remove\" onclick=\"FinancialsModule.removeTicker('${ticker}', event)\" title=\"Удалить\">×</button>\r\n            </div>\r\n        `).join('');\r\n    }\r\n\r\n    // Переключение периода (кварталы/годы)\r\n    function setPeriodType(periodType) {\r\n        state.periodType = periodType;\r\n        \r\n        // Обновляем активную кнопку\r\n        document.querySelectorAll('.toggle-btn').forEach(btn => {\r\n            btn.classList.toggle('active', btn.dataset.period === periodType);\r\n        });\r\n        \r\n        renderFinancialTable();\r\n    }\r\n\r\n    // Отрисовка таблицы финансовых показателей\r\n    function renderFinancialTable() {\r\n        const headerRow = document.getElementById('financials-table-header');\r\n        const tbody = document.getElementById('financials-table-body');\r\n        \r\n        if (!headerRow || !tbody) return;\r\n        \r\n        if (!state.selectedTicker) {\r\n            tbody.innerHTML = '<tr><td colspan=\"6\" class=\"empty-state\">Выберите тикер для отображения данных</td></tr>';\r\n            headerRow.innerHTML = '<th>Показатель</th>';\r\n            return;\r\n        }\r\n        \r\n        const tickerData = state.financialData[state.selectedTicker];\r\n        const periodData = tickerData ? tickerData[state.periodType] : null;\r\n        const periods = periodData ? periodData.periods : [];\r\n        \r\n        // Если нет данных, показываем заглушку\r\n        if (!periods || periods.length === 0) {\r\n            tbody.innerHTML = `<tr><td colspan=\"6\" class=\"empty-state\">Нет данных за ${state.periodType === 'quarterly' ? 'кварталы' : 'годы'}. Загрузите отчетность.</td></tr>`;\r\n            \r\n            // Заголовок только с первым столбцом\r\n            headerRow.innerHTML = '<th>Показатель</th>';\r\n            for (let i = 0; i < 5; i++) {\r\n                headerRow.innerHTML += `<th>-</th>`;\r\n            }\r\n            return;\r\n        }\r\n        \r\n        // Берем последние 5 периодов\r\n        const displayPeriods = periods.slice(-5);\r\n        \r\n        // Рендерим заголовок\r\n        headerRow.innerHTML = '<th>Показатель</th>' + displayPeriods.map(p => `\r\n            <th>\r\n                <div>${p.period}</div>\r\n                <div class=\"period-header\">${p.endDate || ''}</div>\r\n            </th>\r\n        `).join('');\r\n        \r\n        // Рендерим строки с метриками\r\n        const metricsData = periodData ? periodData.data : {};\r\n        \r\n        tbody.innerHTML = defaultMetrics.map(metric => {\r\n            const values = displayPeriods.map(period => {\r\n                const value = metricsData[metric.key] ? metricsData[metric.key][period.period] : null;\r\n                return value !== null && value !== undefined ? formatMetricValue(metric.key, value) : '-';\r\n            });\r\n            \r\n            return `\r\n                <tr>\r\n                    <td class=\"metric-name\">${metric.name}</td>\r\n                    ${values.map(v => `<td>${v}</td>`).join('')}\r\n                </tr>\r\n            `;\r\n        }).join('');\r\n    }\r\n\r\n    // Форматирование значения метрики\r\n    function formatMetricValue(key, value) {\r\n        if (value === null || value === undefined) return '-';\r\n        \r\n        const numValue = parseFloat(value);\r\n        if (isNaN(numValue)) return value;\r\n        \r\n        // Проценты\r\n        if (['roe', 'debt_to_equity', 'current_ratio'].includes(key)) {\r\n            return numValue.toFixed(2) + (key === 'roe' || key === 'debt_to_equity' ? '%' : 'x');\r\n        }\r\n        \r\n        // Большие числа (выручка, прибыль и т.д.)\r\n        if (Math.abs(numValue) >= 1e9) {\r\n            return (numValue / 1e9).toFixed(2) + 'B';\r\n        }\r\n        if (Math.abs(numValue) >= 1e6) {\r\n            return (numValue / 1e6).toFixed(2) + 'M';\r\n        }\r\n        \r\n        return numValue.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\r\n    }\r\n\r\n    // Получение данных для API\r\n    function getFinancialData(ticker) {\r\n        return state.financialData[ticker] || null;\r\n    }\r\n\r\n    // Обновление данных из API\r\n    function updateFinancialData(ticker, periodType, period, endDate, metrics) {\r\n        if (!state.financialData[ticker]) {\r\n            state.financialData[ticker] = {\r\n                quarterly: { periods: [], data: {} },\r\n                annual: { periods: [], data: {} }\r\n            };\r\n        }\r\n        \r\n        const targetData = state.financialData[ticker][periodType];\r\n        \r\n        // Проверяем, есть ли уже такой период\r\n        const existingIndex = targetData.periods.findIndex(p => p.period === period);\r\n        \r\n        if (existingIndex >= 0) {\r\n            // Обновляем существующий период\r\n            targetData.periods[existingIndex] = { period, endDate };\r\n        } else {\r\n            // Добавляем новый период\r\n            targetData.periods.push({ period, endDate });\r\n            // Сортируем периоды\r\n            targetData.periods.sort((a, b) => {\r\n                if (periodType === 'quarterly') {\r\n                    // Сортировка кварталов вида \"Q1 2024\"\r\n                    const parseQuarter = (p) => {\r\n                        const match = p.match(/Q(\\d+)\\s+(\\d+)/);\r\n                        if (match) {\r\n                            return parseInt(match[2]) * 10 + parseInt(match[1]);\r\n                        }\r\n                        return 0;\r\n                    };\r\n                    return parseQuarter(a.period) - parseQuarter(b.period);\r\n                } else {\r\n                    // Сортировка годов\r\n                    return parseInt(a.period) - parseInt(b.period);\r\n                }\r\n            });\r\n        }\r\n        \r\n        // Обновляем данные по метрикам\r\n        Object.keys(metrics).forEach(key => {\r\n            if (!targetData.data[key]) {\r\n                targetData.data[key] = {};\r\n            }\r\n            targetData.data[key][period] = metrics[key];\r\n        });\r\n        \r\n        saveFinancialDataToStorage();\r\n        renderFinancialTable();\r\n    }\r\n\r\n    // Экспорт состояния для использования извне\r\n    return {\r\n        init,\r\n        addTicker,\r\n        removeTicker,\r\n        selectTicker,\r\n        setPeriodType,\r\n        renderTickerList,\r\n        renderFinancialTable,\r\n        updateFinancialData,\r\n        getFinancialData,\r\n        getState: () => state\r\n    };\r\n})();\r\n\r\n// Глобальные функции для HTML\r\nfunction setFinancialPeriod(periodType) {\r\n    FinancialsModule.setPeriodType(periodType);\r\n}\r\n\r\nfunction selectTicker(ticker) {\r\n    FinancialsModule.selectTicker(ticker);\r\n}\r\n\r\nfunction removeTicker(ticker, event) {\r\n    FinancialsModule.removeTicker(ticker, event);\r\n}\r\n\r\nfunction openUploadReportModal() {\r\n    const modal = document.getElementById('upload-report-modal');\r\n    const select = document.getElementById('report-ticker-select');\r\n    \r\n    // Заполняем селект тикерами\r\n    const tickers = FinancialsModule.getState().tickers;\r\n    if (tickers.length === 0) {\r\n        alert('Сначала добавьте тикеры в список');\r\n        return;\r\n    }\r\n    \r\n    select.innerHTML = tickers.map(t => `<option value=\"${t}\">${t}</option>`).join('');\r\n    \r\n    if (modal) {\r\n        modal.style.display = 'flex';\r\n    }\r\n}\r\n\r\nfunction closeUploadReportModal() {\r\n    const modal = document.getElementById('upload-report-modal');\r\n    if (modal) {\r\n        modal.style.display = 'none';\r\n    }\r\n    // Очищаем инпут файла\r\n    const fileInput = document.getElementById('report-file-input');\r\n    if (fileInput) {\r\n        fileInput.value = '';\r\n    }\r\n}\r\n\r\nasync function uploadReportFile() {\r\n    const tickerSelect = document.getElementById('report-ticker-select');\r\n    const periodTypeSelect = document.getElementById('report-period-type');\r\n    const fileInput = document.getElementById('report-file-input');\r\n    \r\n    const ticker = tickerSelect.value;\r\n    const periodType = periodTypeSelect.value;\r\n    const file = fileInput.files[0];\r\n    \r\n    if (!file) {\r\n        alert('Выберите файл для загрузки');\r\n        return;\r\n    }\r\n    \r\n    // Создаем FormData для отправки файла\r\n    const formData = new FormData();\r\n    formData.append('file', file);\r\n    formData.append('ticker', ticker);\r\n    formData.append('period_type', periodType);\r\n    \r\n    try {\r\n        // Отправляем файл на бэкенд\r\n        const response = await fetch('/api/financials/upload', {\r\n            method: 'POST',\r\n            body: formData\r\n        });\r\n        \r\n        if (!response.ok) {\r\n            throw new Error('Ошибка загрузки: ' + response.statusText);\r\n        }\r\n        \r\n        const result = await response.json();\r\n        \r\n        if (result.status === 'ok') {\r\n            // Обновляем данные в интерфейсе\r\n            FinancialsModule.updateFinancialData(\r\n                ticker,\r\n                periodType,\r\n                result.period,\r\n                result.end_date,\r\n                result.metrics\r\n            );\r\n            \r\n            alert('Отчетность успешно загружена и обработана!');\r\n            closeUploadReportModal();\r\n            \r\n            // Если этот тикер выбран, обновляем таблицу\r\n            if (FinancialsModule.getState().selectedTicker === ticker) {\r\n                FinancialsModule.renderFinancialTable();\r\n            }\r\n        } else {\r\n            throw new Error(result.message || 'Ошибка обработки');\r\n        }\r\n    } catch (error) {\r\n        console.error('Ошибка загрузки отчета:', error);\r\n        alert('Ошибка при загрузке отчета: ' + error.message);\r\n    }\r\n}\r\n\r\n// Инициализация при загрузке страницы\r\ndocument.addEventListener('DOMContentLoaded', function() {\r\n    FinancialsModule.init();\r\n});\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/frontend/js/financials.js b/frontend/js/financials.js
+--- a/frontend/js/financials.js	(revision 9c67bb87899d1b9020f692ad1af9ea61cc5ff1a1)
++++ b/frontend/js/financials.js	(date 1790162688521)
+@@ -11,7 +11,8 @@
+         financialData: {} // { ticker: { periods: [...], metrics: {...} } }
+     };
+ 
+-    // Стандартные метрики для отображения
++    // Стандартные метрики для отображения (используются как fallback,
++    // если в отчете нет полной таблицы строк)
+     const defaultMetrics = [
+         { key: 'revenue', name: 'Выручка' },
+         { key: 'gross_profit', name: 'Валовая прибыль' },
+@@ -26,6 +27,17 @@
+         { key: 'free_cash_flow', name: 'Свободный денежный поток' }
+     ];
+ 
++    // Форматирование числа как в smart-lab: с разделителями тысяч, без дробей
++    function formatSmartNumber(value) {
++        if (value === null || value === undefined) return '-';
++        const numValue = parseFloat(value);
++        if (isNaN(numValue)) return String(value);
++        if (Math.abs(numValue - Math.round(numValue)) < 1e-9) {
++            return Math.round(numValue).toLocaleString('ru-RU');
++        }
++        return numValue.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
++    }
++
+     // Инициализация модуля
+     function init() {
+         loadTickersFromStorage();
+@@ -61,13 +73,15 @@
+                                 state.financialData[ticker].quarterly.periods.push(p);
+                             }
+                         });
+-                        // Merge metrics
++                        // Merge метрик
+                         Object.keys(data.quarterly.data || {}).forEach(metricKey => {
+                             if (!state.financialData[ticker].quarterly.data[metricKey]) {
+                                 state.financialData[ticker].quarterly.data[metricKey] = {};
+                             }
+                             Object.assign(state.financialData[ticker].quarterly.data[metricKey], data.quarterly.data[metricKey]);
+                         });
++                        // Merge полной таблицы строк отчета (smart-lab style)
++                        mergeRowsInto(state.financialData[ticker].quarterly, data.quarterly.rows);
+                     }
+                     
+                     if (data.annual && data.annual.periods) {
+@@ -76,13 +90,15 @@
+                                 state.financialData[ticker].annual.periods.push(p);
+                             }
+                         });
+-                        // Merge metrics
++                        // Merge метрик
+                         Object.keys(data.annual.data || {}).forEach(metricKey => {
+                             if (!state.financialData[ticker].annual.data[metricKey]) {
+                                 state.financialData[ticker].annual.data[metricKey] = {};
+                             }
+                             Object.assign(state.financialData[ticker].annual.data[metricKey], data.annual.data[metricKey]);
+                         });
++                        // Merge полной таблицы строк отчета (smart-lab style)
++                        mergeRowsInto(state.financialData[ticker].annual, data.annual.rows);
+                     }
+                 }
+             } catch (error) {
+@@ -96,6 +112,15 @@
+         }
+     }
+ 
++    // Слияние строк полной таблицы отчета в состояние
++    function mergeRowsInto(target, rows) {
++        if (!rows) return;
++        if (!target.rows) target.rows = {};
++        Object.keys(rows).forEach(name => {
++            target.rows[name] = Object.assign({}, target.rows[name] || {}, rows[name]);
++        });
++    }
++
+     // Загрузка тикеров из localStorage
+     function loadTickersFromStorage() {
+         const stored = localStorage.getItem('financials_tickers');
+@@ -240,7 +265,7 @@
+         renderFinancialTable();
+     }
+ 
+-    // Отрисовка таблицы финансовых показателей
++    // Отрисовка таблицы финансовых показателей (в стиле smart-lab: все строки отчета)
+     function renderFinancialTable() {
+         const headerRow = document.getElementById('financials-table-header');
+         const tbody = document.getElementById('financials-table-body');
+@@ -256,8 +281,38 @@
+         const tickerData = state.financialData[state.selectedTicker];
+         const periodData = tickerData ? tickerData[state.periodType] : null;
+         const periods = periodData ? periodData.periods : [];
++        const rawRows = (periodData && periodData.rows) ? periodData.rows : {};
++        const rowNames = Object.keys(rawRows);
++
++        // Полная таблица всех строк отчета (smart-lab style), если есть данные
++        if (rowNames.length > 0) {
++            // Собираем все колонки-периоды из строк + периоды загруженных отчетов
++            const colSet = new Set();
++            rowNames.forEach(name => Object.keys(rawRows[name]).forEach(c => colSet.add(c)));
++            let columns = Array.from(colSet).sort(comparePeriodLabels).reverse();
++            const displayColumns = columns.slice(0, 5); // последние 5 периодов/лет
++
++            headerRow.innerHTML = '<th>Показатель</th>' + displayColumns.map(c => `
++                <th>
++                    <div>${escapeHtml(c)}</div>
++                </th>
++            `).join('');
++
++            tbody.innerHTML = rowNames.map(name => {
++                const cells = displayColumns.map(col => {
++                    const v = rawRows[name][col];
++                    if (v === undefined || v === null) return '<td class="num-cell">-</td>';
++                    const neg = parseFloat(v) < 0 ? ' negative' : '';
++                    return `<td class="num-cell${neg}">${formatSmartNumber(v)}</td>`;
++                }).join('');
++                return `<tr><td class="metric-name" title="${escapeHtml(name)}">${escapeHtml(name)}</td>${cells}</tr>`;
++            }).join('');
++            return;
++        }
+         
+-        // Если нет данных, показываем заглушку
++        // Fallback: стандартные метрики
++        const metricsData = periodData ? periodData.data : {};
++        
+         if (!periods || periods.length === 0) {
+             tbody.innerHTML = `<tr><td colspan="6" class="empty-state">Нет данных за ${state.periodType === 'quarterly' ? 'кварталы' : 'годы'}. Загрузите отчетность.</td></tr>`;
+             
+@@ -281,8 +336,6 @@
+         `).join('');
+         
+         // Рендерим строки с метриками
+-        const metricsData = periodData ? periodData.data : {};
+-        
+         tbody.innerHTML = defaultMetrics.map(metric => {
+             const values = displayPeriods.map(period => {
+                 const value = metricsData[metric.key] ? metricsData[metric.key][period.period] : null;
+@@ -298,6 +351,26 @@
+         }).join('');
+     }
+ 
++    // Сравнение меток периодов ('2025-03-31', 'Q1 2025', '2024')
++    function comparePeriodLabels(a, b) {
++        return periodSortKey(a) - periodSortKey(b);
++    }
++
++    function periodSortKey(label) {
++        let m = label.match(/^(\d{4})-(\d{2})-(\d{2})$/);
++        if (m) return (parseInt(m[1]) * 12 + parseInt(m[2])) * 10;
++        m = label.match(/^Q(\d)\s+(\d{4})$/);
++        if (m) return parseInt(m[2]) * 12 + parseInt(m[1]) * 3;
++        m = label.match(/^(\d{4})$/);
++        if (m) return parseInt(m[1]) * 12 + 12;
++        return 0;
++    }
++
++    function escapeHtml(s) {
++        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
++                        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
++    }
++
+     // Форматирование значения метрики
+     function formatMetricValue(key, value) {
+         if (value === null || value === undefined) return '-';
+@@ -326,8 +399,8 @@
+         return state.financialData[ticker] || null;
+     }
+ 
+-    // Обновление данных из API
+-    function updateFinancialData(ticker, periodType, period, endDate, metrics) {
++    // Обновление данных из API (после загрузки отчета)
++    function updateFinancialData(ticker, periodType, period, endDate, metrics, rawTable) {
+         if (!state.financialData[ticker]) {
+             state.financialData[ticker] = {
+                 quarterly: { periods: [], data: {} },
+@@ -336,6 +409,17 @@
+         }
+         
+         const targetData = state.financialData[ticker][periodType];
++
++        // Полная таблица строк отчета (smart-lab style)
++        if (rawTable && Array.isArray(rawTable.rows)) {
++            if (!targetData.rows) targetData.rows = {};
++            rawTable.rows.forEach(row => {
++                if (!row.name) return;
++                targetData.rows[row.name] = Object.assign(
++                    {}, targetData.rows[row.name] || {}, row.values || {}
++                );
++            });
++        }
+         
+         // Проверяем, есть ли уже такой период
+         const existingIndex = targetData.periods.findIndex(p => p.period === period);
+@@ -469,21 +553,26 @@
+         const result = await response.json();
+         
+         if (result.status === 'ok') {
+-            // Обновляем данные в интерфейсе
++            // Обновляем данные в интерфейсе (включая полную таблицу строк отчета)
+             FinancialsModule.updateFinancialData(
+                 ticker,
+-                periodType,
++                result.period_type || periodType,
+                 result.period,
+                 result.end_date,
+-                result.metrics
++                result.metrics,
++                result.raw_table
+             );
+-            
+-            alert('Отчетность успешно загружена и обработана!');
++
++            alert(`Отчетность успешно загружена! Извлечено строк: ${result.rows_count || 0} за период ${result.period}.`);
+             closeUploadReportModal();
+-            
+-            // Если этот тикер выбран, обновляем таблицу
++
++            // Если этот тикер выбран, переключаемся на его тип периода и обновляем таблицу
+             if (FinancialsModule.getState().selectedTicker === ticker) {
+-                FinancialsModule.renderFinancialTable();
++                if ((result.period_type || periodType) !== FinancialsModule.getState().periodType) {
++                    FinancialsModule.setPeriodType(result.period_type || periodType);
++                } else {
++                    FinancialsModule.renderFinancialTable();
++                }
+             }
+         } else {
+             throw new Error(result.message || 'Ошибка обработки');
+Index: .gitignore
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>```\r\n# Database files\r\n*.db\r\n\r\n# Environment\r\n.env\r\n.env.local\r\n*.env.*\r\n\r\n# Dependencies\r\nnode_modules/\r\nvenv/\r\n.venv/\r\n__pycache__/\r\n*.pyc\r\n\r\n# Build artifacts\r\ndist/\r\nbuild/\r\ntarget/\r\n\r\n# Editors\r\n.vscode/\r\n.idea/\r\n\r\n# Logs and temp files\r\n*.log\r\n*.tmp\r\n*.swp\r\n\r\n# OS generated files\r\n.DS_Store\r\nThumbs.db\r\n```
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.gitignore b/.gitignore
+--- a/.gitignore	(revision 9c67bb87899d1b9020f692ad1af9ea61cc5ff1a1)
++++ b/.gitignore	(date 1790162688408)
+@@ -1,34 +1,1 @@
+-```
+-# Database files
+-*.db
+-
+-# Environment
+-.env
+-.env.local
+-*.env.*
+-
+-# Dependencies
+-node_modules/
+-venv/
+-.venv/
+-__pycache__/
+-*.pyc
+-
+-# Build artifacts
+-dist/
+-build/
+-target/
+-
+-# Editors
+-.vscode/
+-.idea/
+-
+-# Logs and temp files
+-*.log
+-*.tmp
+-*.swp
+-
+-# OS generated files
+-.DS_Store
+-Thumbs.db
+-```
+\ No newline at end of file
++(empty)
+\ No newline at end of file
+Index: requirements.txt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>aiohappyeyeballs==2.7.1\r\naiohttp==3.14.3\r\naiosignal==1.4.0\r\nannotated-doc==0.0.5\r\nannotated-types==0.8.0\r\nanyio==4.15.1\r\nasync-timeout==5.0.1\r\nattrs==26.1.0\r\nbeautifulsoup4==4.15.0\r\ncertifi==2026.7.22\r\ncffi==2.1.1\r\ncharset-normalizer==3.5.1\r\nclick==8.5.0\r\ncurl_cffi==0.16.3\r\nexceptiongroup==1.3.1\r\nfastapi==0.141.1\r\nfrozenlist==1.8.0\r\ngreenlet==3.5.6\r\nh11==0.16.0\r\nhttptools==0.8.0\r\nidna==3.19\r\nlxml==6.1.3\r\nmultidict==6.8.0\r\nmultitasking==0.0.13\r\nnumpy==2.2.6\r\npandas==2.3.3\r\npeewee==4.5.1\r\nplatformdirs==4.11.8\r\npropcache==0.5.2\r\nprotobuf==7.36.1\r\npycparser==3.0\r\npydantic==2.13.5\r\npydantic_core==2.46.5\r\npython-dateutil==2.9.0.post0\r\npython-dotenv==1.2.3\r\npytz==2026.3.post1\r\nPyYAML==6.0.3\r\nrequests==2.34.2\r\nsix==1.17.0\r\nsoupsieve==2.9.2\r\nSQLAlchemy==2.0.52\r\nstarlette==1.6.0\r\ntyping-inspection==0.4.4\r\ntyping_extensions==4.16.0\r\ntzdata==2026.4\r\nurllib3==2.7.0\r\nuvicorn==0.53.0\r\nwatchfiles==1.2.0\r\nwebsockets==16.1.1\r\nyarl==1.24.5\r\nyfinance==1.7.0\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-16LE
+===================================================================
+diff --git a/requirements.txt b/requirements.txt
+--- a/requirements.txt	(revision 9c67bb87899d1b9020f692ad1af9ea61cc5ff1a1)
++++ b/requirements.txt	(date 1790162688522)
+@@ -49,3 +49,4 @@
+ websockets==16.1.1
+ yarl==1.24.5
+ yfinance==1.7.0
++灯湥祰汸㴽⸳⸱ਵ祰摰㵦㔽㠮〮瀊瑹潨⵮潤硣㴽⸱⸲ਰ
+\ No newline at end of file
