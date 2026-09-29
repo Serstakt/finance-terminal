@@ -754,3 +754,271 @@ tv-market-data a[href*="tradingview.com"] { display: none !important; }
     gap: 16px;
   }
 }
+/* ==========================================================================
+   10. 📈 ФИНАНСОВЫЕ ПОКАЗАТЕЛИ (FINANCIALS)
+   ========================================================================== */
+#financials-page {
+  display: none;
+  flex-direction: column;
+  padding: 20px;
+  overflow-y: auto;
+  background: #131722;
+}
+
+#financials-page.active {
+  display: flex;
+}
+
+.financials-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.financials-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #2a2e39;
+}
+
+.financials-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #d1d4dc;
+  margin: 0;
+}
+
+.financials-content {
+  display: flex;
+  gap: 20px;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Левая панель со списком тикеров */
+.financials-sidebar {
+  width: 280px;
+  min-width: 280px;
+  background: #1e222d;
+  border: 1px solid #2a2e39;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.financials-search {
+  display: flex;
+  padding: 12px;
+  gap: 8px;
+  border-bottom: 1px solid #2a2e39;
+}
+
+.financials-search input {
+  flex: 1;
+  background: #2a2e39;
+  border: 1px solid #363a45;
+  border-radius: 4px;
+  padding: 8px 12px;
+  color: #d1d4dc;
+  font-size: 13px;
+  outline: none;
+}
+
+.financials-search input:focus {
+  border-color: #2962ff;
+}
+
+.financials-search button {
+  background: #2962ff;
+  border: none;
+  border-radius: 4px;
+  width: 32px;
+  height: 32px;
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.financials-search button:hover {
+  background: #1e54e6;
+}
+
+.financials-ticker-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.financials-ticker-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  background: #2a2e39;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.financials-ticker-item:hover {
+  background: #363a45;
+}
+
+.financials-ticker-item.active {
+  background: rgba(41, 98, 255, 0.15);
+  border-color: #2962ff;
+}
+
+.financials-ticker-item .ticker-name {
+  font-weight: 600;
+  color: #d1d4dc;
+  font-size: 14px;
+}
+
+.financials-ticker-item .ticker-remove {
+  background: transparent;
+  border: none;
+  color: #787b86;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
+.financials-ticker-item:hover .ticker-remove {
+  opacity: 1;
+}
+
+.financials-ticker-item .ticker-remove:hover {
+  color: #ef5350;
+}
+
+/* Правая панель с таблицей */
+.financials-main {
+  flex: 1;
+  background: #1e222d;
+  border: 1px solid #2a2e39;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.financials-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #2a2e39;
+}
+
+.toggle-group {
+  display: flex;
+  background: #2a2e39;
+  border-radius: 6px;
+  padding: 3px;
+}
+
+.toggle-btn {
+  background: transparent;
+  border: none;
+  color: #787b86;
+  padding: 6px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.toggle-btn:hover {
+  color: #d1d4dc;
+}
+
+.toggle-btn.active {
+  background: #2962ff;
+  color: #fff;
+}
+
+.selected-ticker-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2962ff;
+}
+
+.financials-table-container {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+
+.financials-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.financials-table th,
+.financials-table td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #2a2e39;
+}
+
+.financials-table th {
+  background: #2a2e39;
+  color: #d1d4dc;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.financials-table tr:hover td {
+  background: rgba(41, 98, 255, 0.05);
+}
+
+.financials-table td:first-child {
+  font-weight: 600;
+  color: #d1d4dc;
+  background: #1e222d;
+  position: sticky;
+  left: 0;
+  z-index: 5;
+}
+
+.financials-table .metric-name {
+  color: #d1d4dc;
+}
+
+/* Числовые ячейки полной таблицы отчета (в стиле smart-lab):
+   отрицательные значения красным, по правому краю */
+.financials-table td.num-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.financials-table td.num-cell.negative {
+  color: #f23645;
+}
+
+.financials-table .period-header {
+  color: #787b86;
+  font-size: 12px;
+  font-weight: normal;
+}
+
+.financials-empty {
+  text-align: center;
+  color: #787b86;
+  padding: 40px;
+}

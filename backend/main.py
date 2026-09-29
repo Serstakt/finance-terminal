@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -7,6 +7,7 @@ import asyncio
 
 from .services import moex_service, yahoo_service, crypto_service, telegram_news_service
 from .services import portfolio_service
+from .services import financials_service
 from .models import schemas
 
 app = FastAPI(title="Financial Terminal API")
@@ -82,6 +83,88 @@ async def get_telegram_news(ticker: str, force_refresh: bool = Query(default=Fal
         force_refresh=force_refresh
     )
     return {"symbol": f"MOEX:{clean_ticker}", "news": news}
+
+
+# =============================================================================
+# ФИНАНСОВЫЕ ПОКАЗАТЕЛИ - API ENDPOINTS
+# =============================================================================
+
+@app.post("/api/financials/upload")
+async def upload_financial_report(
+    file: UploadFile = File(...),
+    ticker: str = Form(...),
+    period_type: str = Form(...)
+):
+    """
+    Загружает файл с финансовой отчетностью и обрабатывает его с помощью LLM.
+    Извлеченные данные сохраняются в БД.
+    """
+    try:
+        # Читаем содержимое файла
+        file_content = await file.read()
+        file_type = file.filename.split('.')[-1].lower() if '.' in file.filename else 'unknown'
+        
+        # Обрабатываем файл: читаем все строки отчетности (+ LLM при наличии ключа)
+        llm_result = await financials_service.process_report_with_llm(
+            file_content=file_content,
+            file_type=file_type,
+            ticker=ticker,
+            period_type=period_type
+        )
+
+        actual_period_type = llm_result.get("period_type") or period_type
+        
+        # Сохраняем данные (включая полную таблицу строк) в БД
+        save_result = await financials_service.save_financial_data(
+            ticker=ticker,
+            period_type=actual_period_type,
+            period=llm_result["period"],
+            end_date=llm_result["end_date"],
+            metrics=llm_result["metrics"],
+            raw_table=llm_result.get("raw_table")
+        )
+        
+        if save_result.get("status") == "error":
+            raise HTTPException(status_code=500, detail=save_result.get("message", "Ошибка сохранения"))
+        
+        return {
+            "status": "ok",
+            "ticker": ticker,
+            "period": llm_result["period"],
+            "period_type": actual_period_type,
+            "end_date": llm_result["end_date"],
+            "metrics": llm_result["metrics"],
+            "raw_table": llm_result.get("raw_table"),
+            "rows_count": llm_result.get("rows_count", 0)
+        }
+        
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/financials/{ticker}")
+async def get_financial_data(ticker: str, period_type: str = None):
+    """Получает финансовые данные для тикера"""
+    result = await financials_service.get_financial_data(ticker, period_type)
+    
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result.get("message", "Ошибка получения данных"))
+    
+    return result
+
+
+@app.delete("/api/financials/{ticker}/{period_type}/{period}")
+async def delete_financial_data(ticker: str, period_type: str, period: str):
+    """Удаляет финансовые данные за указанный период"""
+    result = await financials_service.delete_financial_data(ticker, period_type, period)
+    
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result.get("message", "Данные не найдены"))
+    
+    return result
+
 
 if __name__ == "__main__":
     import uvicorn

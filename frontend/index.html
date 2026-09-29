@@ -13,6 +13,7 @@
     <button class="nav-btn" data-page="home" onclick="navigateTo('home')">Главная</button>
     <button class="nav-btn" data-page="watchlist" onclick="navigateTo('watchlist')">Watchlist</button>
     <button class="nav-btn" data-page="portfolio" onclick="navigateTo('portfolio')">Портфель</button>
+    <button class="nav-btn" data-page="financials" onclick="navigateTo('financials')">Фин. показатели</button>
 </nav>
 
 <div id="main-content">
@@ -246,6 +247,62 @@
             </div>
         </div>
     </div>
+
+    <div id="financials-page" class="page">
+        <div class="financials-container">
+            <!-- Заголовок и кнопка загрузки -->
+            <div class="financials-header">
+                <h2 class="financials-title">📈 Финансовые показатели</h2>
+                <button class="btn-primary" onclick="openUploadReportModal()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    Загрузить отчетность
+                </button>
+            </div>
+
+            <div class="financials-content">
+                <!-- Левая панель: список тикеров -->
+                <div class="financials-sidebar">
+                    <div class="financials-search">
+                        <input type="text" id="financials-search-input" placeholder="Поиск тикера..." />
+                        <button id="financials-add-ticker-btn" title="Добавить тикер">+</button>
+                    </div>
+                    <div id="financials-ticker-list" class="financials-ticker-list">
+                        <div class="empty-state">Список пуст. Добавьте тикеры для анализа.</div>
+                    </div>
+                </div>
+
+                <!-- Правая панель: таблица с данными -->
+                <div class="financials-main">
+                    <div class="financials-controls">
+                        <div class="toggle-group">
+                            <button class="toggle-btn active" data-period="quarterly" onclick="setFinancialPeriod('quarterly')">Кварталы</button>
+                            <button class="toggle-btn" data-period="annual" onclick="setFinancialPeriod('annual')">Годы</button>
+                        </div>
+                        <span id="selected-ticker-label" class="selected-ticker-label">Выберите тикер</span>
+                    </div>
+                    <div class="financials-table-container">
+                        <table class="financials-table">
+                            <thead>
+                                <tr id="financials-table-header">
+                                    <th>Показатель</th>
+                                    <!-- Динамически заполняется периодами -->
+                                </tr>
+                            </thead>
+                            <tbody id="financials-table-body">
+                                <tr>
+                                    <td colspan="6" class="empty-state">Выберите тикер для отображения данных</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <div id="debug-panel">
@@ -279,10 +336,33 @@
     </div>
 </div>
 
+<!-- Модальное окно загрузки отчета -->
+<div class="modal-overlay" id="upload-report-modal">
+    <div class="modal-box">
+        <div class="modal-title">📄 Загрузить отчетность</div>
+        <p style="color: #787b86; font-size: 13px; margin-bottom: 16px;">
+            Загрузите файл с финансовой отчетностью (PDF, Excel). Данные будут автоматически извлечены и добавлены в таблицу.
+        </p>
+        <select class="modal-select" id="report-ticker-select" style="margin-bottom: 12px;">
+            <!-- Заполняется тикерами -->
+        </select>
+        <select class="modal-select" id="report-period-type" style="margin-bottom: 12px;">
+            <option value="quarterly">Квартальный отчет</option>
+            <option value="annual">Годовой отчет</option>
+        </select>
+        <input type="file" id="report-file-input" accept=".pdf,.xlsx,.xls,.csv" style="margin-bottom: 16px;" />
+        <div class="modal-buttons">
+            <button class="modal-btn modal-btn-cancel" onclick="closeUploadReportModal()">Отмена</button>
+            <button class="modal-btn modal-btn-save" onclick="uploadReportFile()">Загрузить</button>
+        </div>
+    </div>
+</div>
+
 <script src="js/state.js"></script>
 <script src="js/api.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/main.js"></script>
 <script src="js/portfolio.js"></script>
+<script src="js/financials.js"></script>
 </body>
 </html>
