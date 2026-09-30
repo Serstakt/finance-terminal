@@ -48,7 +48,7 @@ async def save_financial_data(ticker: str, period_type: str, period: str,
     try:
         with get_session() as db:
         # Проверяем, есть ли уже такая запись
-        existing = db.query(FinancialReport).filter_by(
+            existing = db.query(FinancialReport).filter_by(
             ticker=ticker,
             period_type=period_type,
             period=period
@@ -84,7 +84,6 @@ async def save_financial_data(ticker: str, period_type: str, period: str,
             "metrics": metrics
         }
     except Exception as e:
-            db.rollback()
             return {
                 "status": "error",
                 "message": str(e)
@@ -95,7 +94,7 @@ async def get_financial_data(ticker: str, period_type: str = None) -> dict:
     """Получает финансовые данные для тикера"""
     try:
         with get_session() as db:
-        query = db.query(FinancialReport).filter_by(ticker=ticker)
+            query = db.query(FinancialReport).filter_by(ticker=ticker)
         
         if period_type:
             query = query.filter_by(period_type=period_type)
@@ -167,7 +166,7 @@ async def delete_financial_data(ticker: str, period_type: str, period: str) -> d
     """Удаляет финансовые данные"""
     try:
         with get_session() as db:
-        report = db.query(FinancialReport).filter_by(
+            report = db.query(FinancialReport).filter_by(
             ticker=ticker,
             period_type=period_type,
             period=period
@@ -180,7 +179,6 @@ async def delete_financial_data(ticker: str, period_type: str, period: str) -> d
         else:
             return {"status": "error", "message": "Запись не найдена"}
     except Exception as e:
-            db.rollback()
             return {"status": "error", "message": str(e)}
 
 
