@@ -112,16 +112,17 @@ window.render = async function() {
         saveState(); render();
       });
 
-      div.querySelector('.ticker-remove').addEventListener('click', (e) => {
+      div.querySelector('.ticker-remove').addEventListener('click', async (e) => {
         e.stopPropagation();
         if (confirm(`Удалить раздел "${sectionName}"?`)) {
           currentList.tickers = currentList.tickers.filter(s => s !== sym);
           if (currentList.collapsedSections) currentList.collapsedSections = currentList.collapsedSections.filter(s => s !== sym);
           saveState(); render();
+          await saveOrderToDb(appState.activeListId, currentList.tickers); // удаляем из БД
         }
       });
 
-      div.querySelector('.section-title').addEventListener('dblclick', () => {
+      div.querySelector('.section-title').addEventListener('dblclick', async () => {
         const newName = prompt('Введите новое название раздела:', sectionName);
         if (!newName || !newName.trim() || newName.trim() === sectionName) return;
         const newSectionSymbol = `SECTION:${newName.trim()}`;
@@ -132,6 +133,7 @@ window.render = async function() {
             currentList.collapsedSections[currentList.collapsedSections.indexOf(sym)] = newSectionSymbol;
           }
           saveState(); render();
+          await saveOrderToDb(appState.activeListId, currentList.tickers); // переименование раздела — в БД
           log(`Раздел переименован: "${sectionName}" → "${newName.trim()}"`, 'success');
         }
       });
@@ -199,7 +201,7 @@ window.render = async function() {
       div.classList.add('active');
     });
 
-    div.querySelector('.ticker-remove').addEventListener('click', (e) => {
+    div.querySelector('.ticker-remove').addEventListener('click', async (e) => {
       e.stopPropagation();
       if (appState.activeListId.startsWith('fav_')) {
         setFavorite(sym, null);
@@ -209,6 +211,7 @@ window.render = async function() {
           currentList.activeSymbol = currentList.tickers.find(s => !s.startsWith('SECTION:')) || '';
         }
         saveState(); render();
+        await removeTickerFromDb(appState.activeListId, sym); // удаляем из БД
       }
     });
 
