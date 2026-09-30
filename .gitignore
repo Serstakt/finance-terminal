@@ -1,12 +1,9 @@
-# Compiled/Binary files
+# Compiled and build artifacts
 __pycache__/
 *.pyc
 
-# System/Environment files
-backend/database/portfolio.db
-# SQLite databases and WAL sidecars
+# Logs
+*.log
+
+# Database files
 *.db
-*.db-journal
-*.db-shm
-*.db-wal
-*.sqlite3
