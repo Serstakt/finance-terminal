@@ -5,6 +5,9 @@ document.addEventListener('DOMContentLoaded', () => {
   startAutoRefresh();
   requestNotificationPermission();
 
+  // Загружаем состав активного списка из БД (тикеры watchlist хранятся на сервере)
+  syncListWithDb(appState.activeListId);
+
   const savedPage = sessionStorage.getItem('activePage') || 'home';
   navigateTo(savedPage);
 });
@@ -41,7 +44,7 @@ window.openSmartLabNews = function() {
   log(`Открыты новости Smart-Lab для: ${baseTicker}`, 'info');
 };
 
-window.addNewList = function() {
+window.addNewList = async function() {
   const name = prompt('Введите название нового списка:', 'Новый список');
   if (!name) return;
   const id = 'list_' + Date.now();
@@ -159,18 +162,20 @@ window.addTicker = async function() {
     setFavorite(sym, color);
   } else {
     currentList.tickers.push(sym);
+    await addTickerToDb(currentListId, sym); // сохраняем в БД
   }
   currentList.activeSymbol = sym;
   saveState(); createChart(sym); render();
   log(`Добавлен: ${sym}`, 'success');
 };
 
-window.addSection = function() {
+window.addSection = async function() {
   const name = prompt('Введите название раздела:', 'Новый раздел');
   if (!name || !name.trim()) return;
   const currentList = getCurrentList();
   currentList.tickers.push(`SECTION:${name.trim()}`);
   saveState(); render();
+  await saveOrderToDb(appState.activeListId, currentList.tickers); // порядок и разделы — в БД
   log(`Добавлен раздел: "${name.trim()}"`, 'success');
 };
 
@@ -327,6 +332,8 @@ if (typeof Sortable !== 'undefined') {
       });
       getCurrentList().tickers = newList;
       saveState();
+      // сохраняем новый порядок в БД (fav-списки внутри функции пропускаются)
+      if (typeof saveOrderToDb === 'function') saveOrderToDb(appState.activeListId, newList);
       currentSort = { field: null, direction: 'asc' };
       document.querySelectorAll('.column-header').forEach(h => { h.classList.remove('active'); h.querySelector('.sort-icon').textContent = '↕'; });
       log('Порядок обновлен', 'info');

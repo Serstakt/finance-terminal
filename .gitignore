@@ -1,6 +1,6 @@
-# Compiled files
+# Compiled/Binary files
 __pycache__/
 *.pyc
 
-# Environment and logs
-*.log
+# System/Environment files
+backend/database/portfolio.db
