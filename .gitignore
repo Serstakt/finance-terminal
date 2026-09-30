@@ -4,3 +4,9 @@ __pycache__/
 
 # System/Environment files
 backend/database/portfolio.db
+# SQLite databases and WAL sidecars
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite3
