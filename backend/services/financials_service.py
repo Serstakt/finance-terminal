@@ -2,7 +2,7 @@ from sqlalchemy import Column, String, Text, DateTime, Integer, Float, ForeignKe
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import json
-from backend.database.database import Base, SessionLocal, engine
+from backend.database.database import Base, engine, get_session, safe_create_all
 
 
 class FinancialReport(Base):
@@ -20,7 +20,7 @@ class FinancialReport(Base):
 
 
 # Создаем таблицу
-Base.metadata.create_all(bind=engine)
+safe_create_all()
 
 
 def _migrate_add_raw_column():
@@ -45,10 +45,10 @@ _migrate_add_raw_column()
 async def save_financial_data(ticker: str, period_type: str, period: str, 
                                end_date: str, metrics: dict, raw_table: dict = None) -> dict:
     """Сохраняет финансовые данные (включая полную таблицу строк отчета) в БД"""
-    db = SessionLocal()
     try:
+        with get_session() as db:
         # Проверяем, есть ли уже такая запись
-        existing = db.query(FinancialReport).filter_by(
+            existing = db.query(FinancialReport).filter_by(
             ticker=ticker,
             period_type=period_type,
             period=period
@@ -84,20 +84,17 @@ async def save_financial_data(ticker: str, period_type: str, period: str,
             "metrics": metrics
         }
     except Exception as e:
-        db.rollback()
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-    finally:
-        db.close()
+            return {
+                "status": "error",
+                "message": str(e)
+            }
 
 
 async def get_financial_data(ticker: str, period_type: str = None) -> dict:
     """Получает финансовые данные для тикера"""
-    db = SessionLocal()
     try:
-        query = db.query(FinancialReport).filter_by(ticker=ticker)
+        with get_session() as db:
+            query = db.query(FinancialReport).filter_by(ticker=ticker)
         
         if period_type:
             query = query.filter_by(period_type=period_type)
@@ -159,19 +156,17 @@ async def get_financial_data(ticker: str, period_type: str = None) -> dict:
         
         return result
     except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-    finally:
-        db.close()
+            return {
+                "status": "error",
+                "message": str(e)
+            }
 
 
 async def delete_financial_data(ticker: str, period_type: str, period: str) -> dict:
     """Удаляет финансовые данные"""
-    db = SessionLocal()
     try:
-        report = db.query(FinancialReport).filter_by(
+        with get_session() as db:
+            report = db.query(FinancialReport).filter_by(
             ticker=ticker,
             period_type=period_type,
             period=period
@@ -184,10 +179,7 @@ async def delete_financial_data(ticker: str, period_type: str, period: str) -> d
         else:
             return {"status": "error", "message": "Запись не найдена"}
     except Exception as e:
-        db.rollback()
-        return {"status": "error", "message": str(e)}
-    finally:
-        db.close()
+            return {"status": "error", "message": str(e)}
 
 
 async def process_report_with_llm(file_content: bytes, file_type: str, 

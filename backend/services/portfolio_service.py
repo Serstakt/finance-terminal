@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Float
-from backend.database.database import Base, SessionLocal, engine
+from backend.database.database import Base, engine, get_session, safe_create_all
 from backend.services import moex_service, yahoo_service, crypto_service
 
 
@@ -10,12 +10,12 @@ class Position(Base):
     avg_price = Column(Float, nullable=False)
     sector = Column(String, nullable=True, default="Не указан")
 
-Base.metadata.create_all(bind=engine)
+safe_create_all()
 
 
 async def get_portfolio_with_pnl() -> dict:
-    db = SessionLocal()
-    positions = db.query(Position).all()
+    with get_session() as db:
+        positions = db.query(Position).all()
 
     result = []
     total_value = 0
@@ -74,8 +74,6 @@ async def get_portfolio_with_pnl() -> dict:
             "sector": pos.sector
         })
 
-    db.close()
-
     total_pnl = total_value - total_invested
     total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
 
@@ -92,48 +90,42 @@ async def get_portfolio_with_pnl() -> dict:
 
 async def add_position(symbol: str, quantity: float, avg_price: float, sector: str = "Не указан") -> dict:
     clean_symbol = symbol.replace(" ", "").upper()
-    db = SessionLocal()
     try:
-        existing = db.query(Position).filter_by(symbol=clean_symbol).first()
+        with get_session() as db:
+            existing = db.query(Position).filter_by(symbol=clean_symbol).first()
 
-        if existing:
-            total_qty = existing.quantity + quantity
-            existing.avg_price = ((existing.quantity * existing.avg_price + quantity * avg_price) / total_qty)
-            existing.quantity = total_qty
-            existing.sector = sector
-        else:
-            db.add(Position(symbol=clean_symbol, quantity=quantity, avg_price=avg_price, sector=sector))
+            if existing:
+                total_qty = existing.quantity + quantity
+                existing.avg_price = ((existing.quantity * existing.avg_price + quantity * avg_price) / total_qty)
+                existing.quantity = total_qty
+                existing.sector = sector
+            else:
+                db.add(Position(symbol=clean_symbol, quantity=quantity, avg_price=avg_price, sector=sector))
 
-        db.commit()
-        return {"status": "ok", "symbol": clean_symbol}
+            db.commit()
+            return {"status": "ok", "symbol": clean_symbol}
     except Exception as e:
-        db.rollback()
         return {"status": "error", "message": str(e)}
-    finally:
-        db.close()
 
 
 async def remove_position(symbol: str) -> dict:
-    db = SessionLocal()
-
     # Очищаем символ от пробелов и приводим к верхнему регистру
     clean_symbol = symbol.replace(" ", "").upper()
     print(f"🗑️ Попытка удалить позицию: '{clean_symbol}' (исходный: '{symbol}')")
 
-    # Ищем позицию
-    position = db.query(Position).filter_by(symbol=clean_symbol).first()
+    with get_session() as db:
+        # Ищем позицию
+        position = db.query(Position).filter_by(symbol=clean_symbol).first()
 
-    if position:
-        print(f"   ✅ Найдена позиция: {position.symbol}")
-        db.delete(position)
-        db.commit()
-        print(f"   ✅ Позиция удалена")
-        db.close()
-        return {"status": "ok", "symbol": clean_symbol}
-    else:
-        print(f"   ❌ Позиция '{clean_symbol}' не найдена в базе данных")
-        # Попробуем найти все позиции для отладки
-        all_positions = db.query(Position).all()
-        print(f"   📋 Все позиции в базе: {[p.symbol for p in all_positions]}")
-        db.close()
-        return {"status": "error", "message": f"Position {clean_symbol} not found"}
+        if position:
+            print(f"   ✅ Найдена позиция: {position.symbol}")
+            db.delete(position)
+            db.commit()
+            print(f"   ✅ Позиция удалена")
+            return {"status": "ok", "symbol": clean_symbol}
+        else:
+            print(f"   ❌ Позиция '{clean_symbol}' не найдена в базе данных")
+            # Попробуем найти все позиции для отладки
+            all_positions = db.query(Position).all()
+            print(f"   📋 Все позиции в базе: {[p.symbol for p in all_positions]}")
+            return {"status": "error", "message": f"Position {clean_symbol} not found"}

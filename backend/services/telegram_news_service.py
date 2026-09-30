@@ -6,7 +6,7 @@ import re
 import json
 import asyncio
 
-from ..database.database import SessionLocal
+from ..database.database import get_session
 from ..database.models import NewsCache
 
 CACHE_DURATION_SECONDS = 300  # 5 минут
@@ -48,45 +48,40 @@ RU_NAMES = {
 
 async def get_cached_news(ticker: str) -> list | None:
     """Получает новости из БД, если кэш еще действителен."""
-    db = SessionLocal()
     try:
-        cache = db.query(NewsCache).filter(NewsCache.ticker == ticker).first()
-        if cache:
-            age = (datetime.utcnow() - cache.timestamp).total_seconds()
-            if age < CACHE_DURATION_SECONDS:
-                print(f"✅ Возвращаем новости из SQLite кэша для {ticker} (осталось {int(CACHE_DURATION_SECONDS - age)} сек)")
-                return json.loads(cache.news_data)
-            else:
-                print(f"⏳ Кэш устарел для {ticker}, удаляем из БД...")
-                db.delete(cache)
-                db.commit()
-        return None
+        with get_session() as db:
+            cache = db.query(NewsCache).filter(NewsCache.ticker == ticker).first()
+            if cache:
+                age = (datetime.utcnow() - cache.timestamp).total_seconds()
+                if age < CACHE_DURATION_SECONDS:
+                    print(f"✅ Возвращаем новости из SQLite кэша для {ticker} (осталось {int(CACHE_DURATION_SECONDS - age)} сек)")
+                    return json.loads(cache.news_data)
+                else:
+                    print(f"⏳ Кэш устарел для {ticker}, удаляем из БД...")
+                    db.delete(cache)
+                    db.commit()
+            return None
     except Exception as e:
         print(f"❌ Ошибка чтения кэша: {e}")
         return None
-    finally:
-        db.close()
 
 async def save_news_to_cache(ticker: str, news_data: list):
     """Сохраняет или обновляет кэш новостей в БД."""
-    db = SessionLocal()
     try:
-        # Удаляем старую запись (UPSERT через delete + insert проще для SQLite)
-        db.query(NewsCache).filter(NewsCache.ticker == ticker).delete()
+        with get_session() as db:
+            # Удаляем старую запись (UPSERT через delete + insert проще для SQLite)
+            db.query(NewsCache).filter(NewsCache.ticker == ticker).delete()
 
-        new_cache = NewsCache(
-            ticker=ticker,
-            news_data=json.dumps(news_data, ensure_ascii=False),
-            timestamp=datetime.utcnow()
-        )
-        db.add(new_cache)
-        db.commit()
-        print(f"💾 Новости для {ticker} сохранены в SQLite кэш")
+            new_cache = NewsCache(
+                ticker=ticker,
+                news_data=json.dumps(news_data, ensure_ascii=False),
+                timestamp=datetime.utcnow()
+            )
+            db.add(new_cache)
+            db.commit()
+            print(f"💾 Новости для {ticker} сохранены в SQLite кэш")
     except Exception as e:
         print(f"❌ Ошибка сохранения в кэш: {e}")
-        db.rollback()
-    finally:
-        db.close()
 
 async def fetch_smartlab_telegram_news(ticker: str, max_posts: int = 1000, max_news: int = 50, force_refresh: bool = False) -> list:
     channel_username = "newssmartlab"

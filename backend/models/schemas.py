@@ -19,6 +19,21 @@ class PositionCreate(BaseModel):
     sector: str = "Не указан"
 
 
+class WatchlistAdd(BaseModel):
+    list_id: str = "default"
+    symbol: str
+
+
+class WatchlistRemove(BaseModel):
+    list_id: str = "default"
+    symbol: str
+
+
+class WatchlistOrder(BaseModel):
+    list_id: str = "default"
+    symbols: List[str]
+
+
 class FinancialDataUpload(BaseModel):
     ticker: str
     period_type: str  # 'quarterly' или 'annual'

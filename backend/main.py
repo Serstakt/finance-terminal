@@ -8,6 +8,7 @@ import asyncio
 from .services import moex_service, yahoo_service, crypto_service, telegram_news_service
 from .services import portfolio_service
 from .services import financials_service
+from .services import watchlist_service
 from .models import schemas
 
 app = FastAPI(title="Financial Terminal API")
@@ -84,6 +85,41 @@ async def add_position_endpoint(position: schemas.PositionCreate):
 @app.delete("/api/portfolio/{symbol}")
 async def remove_position_endpoint(symbol: str):
     return await portfolio_service.remove_position(symbol)
+
+
+# =============================================================================
+# WATCHLIST - ХРАНЕНИЕ В БД
+# =============================================================================
+
+@app.get("/api/watchlist/{list_id}")
+async def get_watchlist(list_id: str):
+    """Возвращает список тикеров из БД в порядке позиции."""
+    items = watchlist_service.get_list_symbols(list_id)
+    return {"list_id": list_id, "symbols": [i["symbol"] for i in items]}
+
+
+@app.post("/api/watchlist/add")
+async def add_watchlist_ticker(payload: schemas.WatchlistAdd):
+    """Добавляет тикер в watchlist (сохраняется в БД)."""
+    try:
+        return watchlist_service.add_symbol(payload.list_id, payload.symbol)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+
+@app.post("/api/watchlist/remove")
+async def remove_watchlist_ticker(payload: schemas.WatchlistRemove):
+    """Удаляет тикер из watchlist (удаляется из БД)."""
+    result = watchlist_service.remove_symbol(payload.list_id, payload.symbol)
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Тикер не найден в списке")
+    return result
+
+
+@app.post("/api/watchlist/order")
+async def set_watchlist_order(payload: schemas.WatchlistOrder):
+    """Сохраняет новый порядок/состав списка (drag&drop, разделы)."""
+    return watchlist_service.set_order(payload.list_id, payload.symbols)
 
 
 @app.get("/api/news/telegram/{ticker}")
