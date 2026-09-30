@@ -1,7 +1,8 @@
-# Compiled files
 __pycache__/
-*.pyc
 *.py[cod]
-
-# Environment and logs
-*.log
+*.egg-info/
+venv/  .venv/
+.env
+*.log  *.db
+.pytest_cache/  .mypy_cache/  .ruff_cache/
+.DS_Store
