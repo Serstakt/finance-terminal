@@ -1,10 +1,1 @@
-.idea/workspace.xml
-.idea/shelf/
-.idea/tasks.xml
-.idea/dictionaries/
-.idea/httpRequests/
-*.iml
-__pycache__/
-*.py[cod]
-venv/  .venv/  env/
-*.db  *.sqlite  *.sqlite3
+(empty content)

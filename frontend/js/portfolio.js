@@ -30,7 +30,7 @@ window.setChartMode = function(mode) {
 // Загрузка данных портфеля
 window.loadPortfolio = async function() {
   try {
-    const response = await fetch('http://localhost:8000/api/portfolio');
+    const response = await fetch(API_BASE + '/api/portfolio');
     if (!response.ok) throw new Error('Failed to load portfolio');
 
     const data = await response.json();
@@ -287,7 +287,7 @@ window.savePosition = async function() {
   }
 
   try {
-    const response = await fetch('http://localhost:8000/api/portfolio', {
+    const response = await fetch(API_BASE + '/api/portfolio', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, quantity, avg_price: avgPrice, sector: sector })
@@ -314,7 +314,7 @@ window.deletePosition = async function(symbol) {
 
   try {
     // Используем encodeURIComponent для безопасного URL
-    const response = await fetch(`http://localhost:8000/api/portfolio/${encodeURIComponent(cleanSymbol)}`, {
+    const response = await fetch(`${API_BASE}/api/portfolio/${encodeURIComponent(cleanSymbol)}`, {
       method: 'DELETE'
     });
 

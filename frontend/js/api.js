@@ -1,6 +1,11 @@
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 window.delay = ms => new Promise(res => setTimeout(res, ms));
 
+// База для API-запросов: если страница открыта через этот же сервер (uvicorn),
+// используется тот же origin. Иначе (например, фронтенд открыт отдельно) — localhost:8000.
+window.API_BASE = (location.protocol === 'http:' || location.protocol === 'https:') && location.port !== ''
+  ? '' : 'http://localhost:8000';
+
 // === ПОЛУЧЕНИЕ ДАННЫХ ПО ТИКЕРУ ===
 window.fetchTickerData = async function(symbol) {
   if (symbol.startsWith('SECTION:')) return null;
@@ -12,7 +17,7 @@ window.fetchTickerData = async function(symbol) {
   }
 
   try {
-    const response = await fetch(`http://localhost:8000/api/prices/${encodeURIComponent(symbol)}`);
+    const response = await fetch(`${API_BASE}/api/prices/${encodeURIComponent(symbol)}`);
     if (!response.ok) return null;
     const data = await response.json();
 

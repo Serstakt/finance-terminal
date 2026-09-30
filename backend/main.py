@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pathlib import Path
 import asyncio
 
@@ -24,15 +24,29 @@ app.add_middleware(
 # Путь к фронтенду
 FRONTEND_PATH = Path(__file__).parent.parent / "frontend"
 
-# Раздаем статику (CSS, JS) напрямую
-app.mount("/css", StaticFiles(directory=FRONTEND_PATH / "css"), name="css")
-app.mount("/js", StaticFiles(directory=FRONTEND_PATH / "js"), name="js")
+
+@app.on_event("startup")
+async def mount_frontend():
+    """Монтируем статику фронтенда в конце, чтобы "/..." не перехватывал /api/*-маршруты."""
+    app.mount("/css", StaticFiles(directory=FRONTEND_PATH / "css"), name="css")
+    app.mount("/js", StaticFiles(directory=FRONTEND_PATH / "js"), name="js")
 
 
 # Главная страница
 @app.get("/")
 async def root():
-    return FileResponse(FRONTEND_PATH / "index.html")
+    return FileResponse(FRONTEND_PATH / "index.html", headers={"Cache-Control": "no-cache"})
+
+
+# Иконка сайта: без неё браузер просит /favicon.ico и запрос «висит»,
+# из-за чего вкладка показывает бесконечную загрузку.
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    icon = FRONTEND_PATH / "favicon.ico"
+    if icon.exists():
+        return FileResponse(icon)
+    # Пустой ответ 204 вместо зависающего/бесконечного 404
+    return Response(status_code=204)
 
 
 # API endpoints
