@@ -54,7 +54,7 @@ const FinancialsModule = (function() {
         
         for (const ticker of state.tickers) {
             try {
-                const response = await fetch(`/api/financials/${ticker}`);
+                const response = await window.fetchWithTimeout(`/api/financials/${ticker}`, {}, 30000);
                 if (response.ok) {
                     const data = await response.json();
                     
@@ -541,7 +541,7 @@ async function uploadReportFile() {
     
     try {
         // Отправляем файл на бэкенд
-        const response = await fetch('/api/financials/upload', {
+        const response = await window.fetchWithTimeout('/api/financials/upload', {
             method: 'POST',
             body: formData
         });

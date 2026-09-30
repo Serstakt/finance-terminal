@@ -314,22 +314,27 @@ window.playAlertSound = function() {
   }
 };
 
-// Drag and Drop инициализация
-new Sortable(document.getElementById('ticker-list'), {
-  animation: 150, handle: '.drag-handle', ghostClass: 'sortable-ghost', dragClass: 'sortable-drag',
-  onEnd: function () {
-    const newList = [];
-    document.querySelectorAll('#ticker-list .ticker-item, #ticker-list .section-header').forEach(item => {
-      const btn = item.querySelector('.ticker-remove');
-      if (btn) newList.push(btn.getAttribute('data-symbol'));
-    });
-    getCurrentList().tickers = newList;
-    saveState();
-    currentSort = { field: null, direction: 'asc' };
-    document.querySelectorAll('.column-header').forEach(h => { h.classList.remove('active'); h.querySelector('.sort-icon').textContent = '↕'; });
-    log('Порядок обновлен', 'info');
-  }
-});
+// Drag and Drop инициализация (Sortable грузится с CDN асинхронно — ждём его,
+// иначе при недоступности cdnjs здесь падал ReferenceError и весь код ниже не выполнялся)
+if (typeof Sortable !== 'undefined') {
+  new Sortable(document.getElementById('ticker-list'), {
+    animation: 150, handle: '.drag-handle', ghostClass: 'sortable-ghost', dragClass: 'sortable-drag',
+    onEnd: function () {
+      const newList = [];
+      document.querySelectorAll('#ticker-list .ticker-item, #ticker-list .section-header').forEach(item => {
+        const btn = item.querySelector('.ticker-remove');
+        if (btn) newList.push(btn.getAttribute('data-symbol'));
+      });
+      getCurrentList().tickers = newList;
+      saveState();
+      currentSort = { field: null, direction: 'asc' };
+      document.querySelectorAll('.column-header').forEach(h => { h.classList.remove('active'); h.querySelector('.sort-icon').textContent = '↕'; });
+      log('Порядок обновлен', 'info');
+    }
+  });
+} else {
+  console.warn('Sortable (cdnjs) не загружен — перетаскивание списка недоступно.');
+}
 
 // Ресайзер
 const resizer = document.getElementById('resizer');

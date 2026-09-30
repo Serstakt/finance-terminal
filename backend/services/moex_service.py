@@ -1,3 +1,4 @@
+import asyncio
 import aiohttp
 
 
@@ -16,12 +17,14 @@ async def fetch_moex_price(ticker: str) -> dict:
     else:
         url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker}.json"
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
         try:
-            async with session.get(url, timeout=5) as response:
+            async with session.get(url) as response:
                 if response.status != 200:
                     return {"symbol": f"MOEX:{ticker}", "error": f"Not found (Status {response.status})"}
                 data = await response.json()
+        except asyncio.TimeoutError:
+            return {"symbol": f"MOEX:{ticker}", "error": "Timeout"}
         except Exception as e:
             return {"symbol": f"MOEX:{ticker}", "error": str(e)}
 

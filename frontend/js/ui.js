@@ -75,12 +75,13 @@ window.render = async function() {
   if (!container) return;
   populateListSelector();
 
+  // Запрашиваем цены ПАРАЛЛЕЛЬНО (с таймаутом в fetchTickerData).
+  // Последовательный await для каждого тикера складывал задержки: при медленном
+  // внешнем API список «загружался» бесконечно долго.
   const dataMap = {};
-  for (const sym of currentList.tickers) {
-    if (sym.startsWith('SECTION:')) continue;
-    dataMap[sym] = await fetchTickerData(sym);
-    await delay(50); // Небольшая задержка, чтобы не спамить UI
-  }
+  const symbols = currentList.tickers.filter(s => !s.startsWith('SECTION:'));
+  const results = await Promise.all(symbols.map(sym => fetchTickerData(sym)));
+  symbols.forEach((sym, i) => { dataMap[sym] = results[i]; });
 
   const sortedList = sortList(currentList.tickers, dataMap);
   container.innerHTML = '';

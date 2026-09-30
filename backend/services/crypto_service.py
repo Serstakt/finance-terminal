@@ -4,7 +4,7 @@ async def fetch_crypto_price(symbol: str) -> dict:
     coin_id = symbol.lower().replace('usdt', '').replace('btc', 'bitcoin').replace('eth', 'ethereum')
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&include_24hr_change=true"
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
         async with session.get(url) as response:
             if response.status != 200:
                 return {"symbol": f"BINANCE:{symbol}", "error": "API limit or error"}

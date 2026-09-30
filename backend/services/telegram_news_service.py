@@ -123,8 +123,8 @@ async def fetch_smartlab_telegram_news(ticker: str, max_posts: int = 1000, max_n
             page += 1
             url = f"https://t.me/s/{channel_username}?before={before_id}" if before_id else f"https://t.me/s/{channel_username}"
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=10) as response:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+                async with session.get(url, headers=headers) as response:
                     if response.status != 200:
                         print(f"❌ Telegram вернул статус {response.status}")
                         break
