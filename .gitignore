@@ -4,5 +4,7 @@ __pycache__/
 venv/  .venv/
 .env
 *.log  *.db
+*.db-wal
 .pytest_cache/  .mypy_cache/  .ruff_cache/
 .DS_Store
+*.xml
