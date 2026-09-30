@@ -4,8 +4,12 @@
     <meta charset="UTF-8">
     <title>Финансовый терминал</title>
     <link rel="stylesheet" href="css/styles.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
-    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+    <!-- ВАЖНО: внешние скрипты (Sortable, TradingView) загружаются АСИНХРОННО (defer).
+         Обычный <script src="..."> блокирует разбор страницы: если CDN недоступен
+         (блокировка провайдером/регионом, файрвол, антивирус, прокси), вкладка
+         «вечно грузит» и локальный сервер тут ни при чём. -->
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+    <script defer src="https://s3.tradingview.com/tv.js"></script>
 </head>
 <body>
 <nav id="nav-bar">
@@ -20,23 +24,50 @@
     <div id="home-page" class="page">
         <h1 class="home-header">Обзор рынка</h1>
         <div class="market-widgets-container">
-            <!-- Виджет 1: TradingView -->
-            <div class="tv-market-overview">
-                <script type="module" src="https://widgets.tradingview-widget.com/w/ru/tv-market-data.js"></script>
-                <tv-market-data symbol-sectors='[{"sectionName":"Indices","symbols":["FOREXCOM:SPXUSD","FOREXCOM:NSXUSD","FOREXCOM:DJI","INDEX:NKY","RUS:IRUS","RUS:RTSI","RUS:RGBI","CAPITALCOM:DXY","OANDA:XAUUSD","BLACKBULL:BRENT","NASDAQ:TLT","BITSTAMP:BTCUSD"]}]' view="performance" heatmaptheme="dark"></tv-market-data>
+            <!-- Виджет 1: TradingView (встраивается асинхронно после загрузки страницы) -->
+            <div class="tv-market-overview" id="tv-market-overview">
+                <div class="widget-fallback">Загрузка виджета…</div>
             </div>
-            <!-- Виджет 2: Investing.com -->
-            <div class="investing-widget-container">
-                <iframe
-                        src="https://ru.widgets.investing.com/live-currency-cross-rates?theme=darkTheme&roundedCorners=true&cols=last,change,changePerc,time&pairs=1,3,1073360,1073358,9530"
-                        width="100%"
-                        height="100%"
-                        frameborder="0"
-                        allowtransparency="true"
-                        marginwidth="0"
-                        marginheight="0">
-                </iframe>
+            <!-- Виджет 2: Investing.com (встраивается асинхронно после загрузки страницы) -->
+            <div class="investing-widget-container" id="investing-widget-container">
+                <div class="widget-fallback">Загрузка виджета…</div>
             </div>
+            <script>
+              // Внешние виджеты вставляются ПОСЛЕ загрузки документа, чтобы зависший
+              // доступ к tradingview.com / investing.com не блокировал открытие страницы.
+              window.addEventListener('load', function () {
+                try {
+                  var tvBox = document.getElementById('tv-market-overview');
+                  if (tvBox) {
+                    var mod = document.createElement('script');
+                    mod.type = 'module';
+                    mod.src = 'https://widgets.tradingview-widget.com/w/ru/tv-market-data.js';
+                    mod.onerror = function () { tvBox.innerHTML = '<div class="widget-fallback">⚠️ Виджет TradingView недоступен (заблокирован сетью)</div>'; };
+                    var el = document.createElement('tv-market-data');
+                    el.setAttribute('symbol-sectors', '[{"sectionName":"Indices","symbols":["FOREXCOM:SPXUSD","FOREXCOM:NSXUSD","FOREXCOM:DJI","INDEX:NKY","RUS:IRUS","RUS:RTSI","RUS:RGBI","CAPITALCOM:DXY","OANDA:XAUUSD","BLACKBULL:BRENT","NASDAQ:TLT","BITSTAMP:BTCUSD"]}]');
+                    el.setAttribute('view', 'performance');
+                    el.setAttribute('heatmaptheme', 'dark');
+                    tvBox.appendChild(mod);
+                    tvBox.appendChild(el);
+                  }
+                } catch (e) { console.warn('TradingView overview widget failed:', e); }
+
+                try {
+                  var invBox = document.getElementById('investing-widget-container');
+                  if (invBox) {
+                    var frame = document.createElement('iframe');
+                    frame.src = 'https://ru.widgets.investing.com/live-currency-cross-rates?theme=darkTheme&roundedCorners=true&cols=last,change,changePerc,time&pairs=1,3,1073360,1073358,9530';
+                    frame.width = '100%';
+                    frame.height = '100%';
+                    frame.frameBorder = '0';
+                    frame.allowTransparency = true;
+                    frame.marginWidth = '0';
+                    frame.marginHeight = '0';
+                    invBox.appendChild(frame);
+                  }
+                } catch (e) { console.warn('Investing widget failed:', e); }
+              });
+            </script>
 
         </div>
         <h2 style="font-size: 18px; margin-bottom: 15px; color: #d1d4dc;">Быстрые действия</h2>
@@ -358,11 +389,31 @@
     </div>
 </div>
 
-<script src="js/state.js"></script>
-<script src="js/api.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/main.js"></script>
-<script src="js/portfolio.js"></script>
-<script src="js/financials.js"></script>
+<!-- defer: скрипты выполсятся строго в этом порядке после разбора HTML,
+     но не будут блокировать отрисовку страницы -->
+<script defer src="js/state.js"></script>
+<script defer src="js/api.js"></script>
+<script defer src="js/ui.js"></script>
+<script defer src="js/main.js"></script>
+<script defer src="js/portfolio.js"></script>
+<script defer src="js/financials.js"></script>
+
+<!-- Индикатор состояния внешних CDN: если TradingView/Sortable недоступны,
+     показываем предупреждение вместо «вечной загрузки» -->
+<script>
+window.addEventListener('load', function () {
+  var blocked = [];
+  if (typeof Sortable === 'undefined') blocked.push('cdnjs.cloudflare.com');
+  if (typeof TradingView === 'undefined') blocked.push('s3.tradingview.com');
+  if (blocked.length) {
+    var bar = document.createElement('div');
+    bar.id = 'cdn-warning';
+    bar.textContent = '⚠️ Внешние сервисы (' + blocked.join(', ') + ') не отвечают — часть виджетов недоступна. Данные терминала работают.';
+    bar.title = 'Проверьте блокировщик рекламы / файрвол / антивирус / прокси. Сам сервер запускается нормально.';
+    document.body.appendChild(bar);
+    setTimeout(function () { bar.style.opacity = '0'; setTimeout(function(){ bar.remove(); }, 500); }, 12000);
+  }
+});
+</script>
 </body>
 </html>

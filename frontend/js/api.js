@@ -1,6 +1,21 @@
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 window.delay = ms => new Promise(res => setTimeout(res, ms));
 
+// База для API-запросов: если страница открыта через этот же сервер (uvicorn),
+// используется тот же origin. Иначе (например, фронтенд открыт отдельно) — localhost:8000.
+window.API_BASE = (location.protocol === 'http:' || location.protocol === 'https:') && location.port !== ''
+  ? '' : 'http://localhost:8000';
+
+// === БЕЗОПАСНЫЙ FETCH С ТАЙМАУТОМ ===
+// Обычный fetch к внешнему/зависшему сервису может «висеть» бесконечно —
+// из-за этого вкладки крутят индикатор загрузки. Обрываем такие запросы по таймеру.
+window.fetchWithTimeout = function(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+};
+
 // === ПОЛУЧЕНИЕ ДАННЫХ ПО ТИКЕРУ ===
 window.fetchTickerData = async function(symbol) {
   if (symbol.startsWith('SECTION:')) return null;
@@ -12,7 +27,10 @@ window.fetchTickerData = async function(symbol) {
   }
 
   try {
-    const response = await fetch(`http://localhost:8000/api/prices/${encodeURIComponent(symbol)}`);
+    // Таймаут 20 с: если MOEX/Yahoo/Binance не отвечают — отказ, а не вечная загрузка
+    const response = await window.fetchWithTimeout(
+      `${API_BASE}/api/prices/${encodeURIComponent(symbol)}`, {}, 20000
+    );
     if (!response.ok) return null;
     const data = await response.json();
 
@@ -157,7 +175,9 @@ window.loadTickerNews = async function(symbol, forceRefresh = false) {
       const url = `/api/news/telegram/${ticker}?force_refresh=${forceRefresh}`;
       console.log("📡 [DEBUG] Отправляем fetch на:", url);
 
-      const response = await fetch(url);
+      // Парсинг Telegram-канала может занимать десятки секунд — ставим таймаут 60 с,
+      // чтобы запрос не «висел» бесконечно и не удерживал индикатор загрузки вкладки
+      const response = await window.fetchWithTimeout(url, {}, 60000);
       console.log("📥 [DEBUG] Ответ получен, статус:", response.status);
 
       if (response.ok) {
